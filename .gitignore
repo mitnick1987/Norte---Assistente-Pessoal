@@ -1,0 +1,18 @@
+# Segurança: o .env real nunca entra no git — versione só o .env.example.
+.env
+.env.*
+!.env.example
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+
+# Claude Code — estado local, não versiona
+.claude/settings.local.json
+
+# ADAPTE: acrescente os diretórios de dependências e build da stack
+# (ex.: node_modules/, dist/, coverage/, target/, __pycache__/, .venv/).

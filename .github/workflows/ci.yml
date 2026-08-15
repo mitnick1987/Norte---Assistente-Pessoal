@@ -1,0 +1,91 @@
+# =============================================================================
+# ATENÇÃO: este workflow é um ESQUELETO — ele NÃO funciona como está.
+# Antes de usar em {{PROJETO}}, substitua todo comando marcado com "ADAPTE"
+# pelo comando real da stack definida em docs/ARCHITECTURE.md. Cada step não
+# adaptado falha de propósito (exit 1) para nenhum gate passar em silêncio.
+#
+# Gates obrigatórios do processo (docs/process/DEVELOPMENT_PROCESS.md):
+# lint, typecheck, testes com cobertura, build e scan de segurança.
+# PR só entra em main com todos verdes.
+# =============================================================================
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Token de CI só lê — nenhum step precisa de escrita, e action de terceiro
+# comprometida não deve conseguir alterar nada. pull-requests: read é o mínimo
+# que ferramentas de secret scanning costumam exigir para listar os commits
+# do PR; se a sua não precisar, remova.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  quality:
+    name: Lint, typecheck, testes e build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup do runtime
+        # ADAPTE: setup do runtime e do gerenciador de pacotes da stack, com
+        # cache de dependências (use a action oficial de setup da linguagem).
+        run: 'echo "ADAPTE: setup do runtime da stack" && exit 1'
+
+      - name: Instalar dependências
+        # ADAPTE: instalação com lockfile travado — o build deve falhar se o
+        # lockfile divergir do manifesto.
+        run: 'echo "ADAPTE: comando de instalação com lockfile travado" && exit 1'
+
+      - name: Build dos pacotes compartilhados
+        # ADAPTE: se os apps dependem de pacotes compartilhados buildados
+        # (tipos, contratos), builde-os antes do typecheck; senão, remova.
+        run: 'echo "ADAPTE: build dos pacotes compartilhados (ou remova o step)" && exit 1'
+
+      - name: Lint
+        # ADAPTE: comando de lint da stack.
+        run: 'echo "ADAPTE: comando de lint" && exit 1'
+
+      - name: Typecheck
+        # ADAPTE: checagem de tipos no modo estrito da linguagem.
+        run: 'echo "ADAPTE: comando de typecheck" && exit 1'
+
+      - name: Testes (com cobertura)
+        # ADAPTE: testes unitários com relatório de cobertura. O gate mínimo
+        # de cobertura está em docs/TESTING.md e deve falhar o build quando
+        # não for atingido.
+        run: 'echo "ADAPTE: comando de testes com cobertura" && exit 1'
+
+      - name: Testes de integração
+        # ADAPTE: testes de integração (banco/serviços reais em container,
+        # conforme docs/TESTING.md); remova enquanto o projeto não tiver
+        # essa suite.
+        run: 'echo "ADAPTE: comando de testes de integração (ou remova o step)" && exit 1'
+
+      - name: Build
+        # ADAPTE: build de produção de todos os apps e pacotes.
+        run: 'echo "ADAPTE: comando de build" && exit 1'
+
+  security:
+    name: Gates de segurança
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # O scan de secrets varre o histórico completo, não só o diff
+          fetch-depth: 0
+
+      - name: Secret scanning
+        # ADAPTE: plugue a ferramenta de secret scanning do time (uma action
+        # que varra o histórico do repositório). Gate: qualquer secret
+        # encontrado falha o build.
+        run: 'echo "ADAPTE: ferramenta de secret scanning" && exit 1'
+
+      - name: Auditoria de dependências
+        # ADAPTE: auditoria de vulnerabilidades do gerenciador de pacotes da
+        # stack. Gate: vulnerabilidade de severidade high ou acima falha o
+        # build.
+        run: 'echo "ADAPTE: comando de auditoria de dependências (gate >= high)" && exit 1'

@@ -1,0 +1,15 @@
+# Base editorial agnóstica de stack — regras de formatação por linguagem
+# ficam no linter/formatter definidos em docs/process/CODE_STYLE.md.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Trailing space tem significado em Markdown (quebra de linha)
+[*.md]
+trim_trailing_whitespace = false
