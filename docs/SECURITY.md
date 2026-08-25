@@ -72,7 +72,7 @@ Como o tráfego chega à VPS, recurso a recurso:
 - **Firewall do VPS:** só 80/443 (HTTP/HTTPS, redirecionado para TLS pelo Caddy) e SSH com autenticação por chave (senha desabilitada). Nenhuma outra porta aberta.
 - **Superfície HTTP do `brain`:** duas rotas, ambas atrás do Caddy — `POST /webhook/evolution` (única entrada de eventos) e `GET /health` (estado dos subsistemas, consumido pelo watchdog interno e pelo ping do Healthchecks.io). Não há API pública nem rotas administrativas expostas (ver [ARCHITECTURE.md §5](ARCHITECTURE.md)).
 - **Atualizações de sistema automáticas** na VPS (patches de segurança do SO aplicados sem intervenção manual).
-- **Imagens de container pinadas:** Evolution API fixada em 2.3.6 (upgrade só após teste em paralelo, ver ADR-002 em [ARCHITECTURE.md §7](ARCHITECTURE.md)); demais imagens do Compose com tag fixa, não `latest`.
+- **Imagens de container pinadas:** Evolution API fixada em 2.3.7, a última estável (upgrade só após teste em paralelo; a eventual adoção da 2.4.x traz ativação de licença gratuita com cadastro e telemetria de metadados para a Evolution Foundation — antes de migrar, registrar essa transferência na §8/LGPD, ver ADR-002); demais imagens do Compose com tag fixa, não `latest`.
 - **Dependabot** habilitado no repositório para alertar/atualizar dependências com vulnerabilidade conhecida.
 
 Não há WAF, mitigação de bots ou CDN na frente do Caddy — desproporcional a um sistema com um único usuário legítimo e sem tráfego público. A defesa relevante contra tráfego indesejado é o filtro de JID (§2), que atua depois do TLS/Caddy, na aplicação.

@@ -2,7 +2,7 @@
 
 **Versão:** 0.1 · **Data:** 2026-08-25 · Referências: [PRD.md](PRD.md) · [SECURITY.md](SECURITY.md) · [TESTING.md](TESTING.md)
 
-Stack: **sem frontend na v1 — UI 100% conversacional no WhatsApp (UIs futuras: Next.js + Tailwind v4 com o design system do MedClinic, ver ADR-012) · Node.js 22 + TypeScript strict com Fastify (backend) · SQLite WAL via better-sqlite3 · VPS com Docker Compose (Caddy TLS, Evolution API 2.3.6, Litestream → Backblaze B2, Healthchecks.io)**.
+Stack: **sem frontend na v1 — UI 100% conversacional no WhatsApp (UIs futuras: Next.js + Tailwind v4 com o design system do MedClinic, ver ADR-012) · Node.js 22 + TypeScript strict com Fastify (backend) · SQLite WAL via better-sqlite3 · VPS com Docker Compose (Caddy TLS, Evolution API 2.3.7, Litestream → Backblaze B2, Healthchecks.io)**.
 
 Toda escolha técnica com impacto duradouro tem ADR em [docs/adr/](adr/) (ver §7).
 
@@ -13,7 +13,7 @@ Toda escolha técnica com impacto duradouro tem ADR em [docs/adr/](adr/) (ver §
 ```mermaid
 flowchart TB
     U["Usuário (WhatsApp no celular)"] <--> META["Rede WhatsApp (Meta)"]
-    META <--> EVO["Evolution API 2.3.6<br/>(container; Postgres 15 + Redis exclusivos dela)"]
+    META <--> EVO["Evolution API 2.3.7<br/>(container; Postgres 15 + Redis exclusivos dela)"]
 
     subgraph VPS["VPS (Docker Compose, 24/7)"]
         CADDY["Caddy (TLS, única porta exposta)"]
@@ -53,7 +53,7 @@ Decisões-chave:
 .
 ├── docs/                       PRD, arquitetura, segurança, testes, ADRs, specs de feature
 ├── infra/
-│   ├── docker-compose.yml      caddy, evolution (pinada 2.3.6), postgres+redis da evolution, brain, litestream
+│   ├── docker-compose.yml      caddy, evolution (pinada 2.3.7), postgres+redis da evolution, brain, litestream
 │   ├── Caddyfile               TLS; única superfície exposta (/webhook, /health)
 │   └── litestream.yml          replicação SQLite → Backblaze B2
 ├── src/
@@ -302,7 +302,7 @@ Erro que ninguém vê não existe até virar incidente — e aqui incidente sign
 | # | Decisão | Motivo |
 |---|---|---|
 | [ADR-001](adr/ADR-001-claude-messages-api.md) | Claude Messages API direta (tool use manual), não Agent SDK | Daemon de webhooks com controle total de caching, custo e persistência; Agent SDK é para agentes de código |
-| [ADR-002](adr/ADR-002-evolution-pinada-236.md) | Evolution API pinada em 2.3.6 | 2.4.0+ exige ativação de licença (breaking para headless); upgrade só após teste em paralelo |
+| [ADR-002](adr/ADR-002-evolution-pin-e-licenca.md) | Evolution API pinada na última estável (2.3.7); 2.4.x só quando estável | Licença community da 2.4.0+ é gratuita, mas adiciona ativação obrigatória (servidor de licenças no boot) e telemetria; upgrade só após teste em paralelo |
 | [ADR-003](adr/ADR-003-sqlite-unica-persistencia.md) | SQLite WAL como única persistência do brain | Single-user, zero operação, backup por Litestream; Postgres/Redis existem só como dependências internas da Evolution |
 | [ADR-004](adr/ADR-004-scheduler-duravel.md) | Scheduler durável em tabela `jobs` (poll 30s, catch-up no boot) | Lembrete perdido em restart é falha inaceitável; cron em memória proibido |
 | [ADR-005](adr/ADR-005-numero-secundario-antiban.md) | Número secundário dedicado + política anti-banimento | Banimento vira troca de chip em minutos; dados nunca vivem no WhatsApp |
