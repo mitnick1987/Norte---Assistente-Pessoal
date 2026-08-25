@@ -64,7 +64,7 @@ Decisões-chave:
 │   │   ├── db/                 conexão SQLite (WAL), runner de migrações (inclusive as dos módulos)
 │   │   ├── scheduler/          jobs duráveis: poll 30s, catch-up no boot, recorrência, retries
 │   │   ├── outbox/             envio de mensagens: fila, confirmação pós-2xx, delay aleatório, sendPresence, teto diário de proativas
-│   │   ├── llm/                cliente Claude: triagem (Haiku), brain (Sonnet), Batch API; prompt caching byte-estável; monitor de custo
+│   │   ├── llm/                provedores plugáveis (ADR-017): anthropic-api-key (padrão e único do caminho crítico), claude-account e openai-account (OAuth, M3); triagem (Haiku), brain (Sonnet), Batch API; prompt caching byte-estável; monitor de custo
 │   │   ├── channel/            interface Channel + registry: whatsapp-evolution (ativo), api-compat OpenAI/Anthropic (M2, ADR-016), telegram (dormente, M3)
 │   │   ├── mcp/                servidor MCP sobre o registry de tools do kernel — Claude Code/Codex operam o Norte (M2, ADR-014)
 │   │   ├── stt/                interface de transcrição: groq (ativo), openai-whisper (fallback)
@@ -87,6 +87,7 @@ Decisões-chave:
 │   │       ├── gmail/            (RF-22, M2)
 │   │       ├── work/             conector plugável Jira/Trello/Linear (RF-26, M3)
 │   │       └── code-agents/      dispara Claude Code/Codex CLI headless com guardrails (RF-31, M3, ADR-015)
+│   ├── admin/                  UI local de administração (M3, ADR-017): login OAuth de contas, status de provedores/integrações — servida pelo brain, design system MedClinic (ADR-012)
 │   ├── infra-ops/              watchdog CONNECTION_UPDATE, ping Healthchecks, alertas por e-mail, métricas de entrega
 │   └── app.ts                  composição: lista explícita de módulos ativos por fase (M1 liga 10, M2/M3 acrescentam)
 └── tests/                      unit (domínio puro), integração (webhook→resposta), cenários (tom, falha injetada)
@@ -320,3 +321,4 @@ Erro que ninguém vê não existe até virar incidente — e aqui incidente sign
 | [ADR-014](adr/ADR-014-integracao-mcp.md) | Servidor MCP como segundo transporte do registry de tools | Claude Code/Codex operam o Norte com 1 servidor para N agentes; validação única no backend; registry transport-agnostic desde a FEAT-001 |
 | [ADR-015](adr/ADR-015-orquestracao-cli-agentes.md) | Norte dispara Claude Code/Codex CLI headless; login delegado aos CLIs | Zero credencial de conta no Norte; guardrails bloqueantes (allowlist de diretórios, confirmação no chat, auditoria) |
 | [ADR-016](adr/ADR-016-canal-api-nativo.md) | Canal API nativo compatível OpenAI/Anthropic (estilo 9router) | Qualquer ferramenta com base URL customizado conversa com o Norte sem plugin; segunda implementação da interface Channel, mesmo funil e validação |
+| [ADR-017](adr/ADR-017-provedores-llm-login-contas.md) | Provedores de LLM plugáveis; login de contas Claude/OpenAI pela UI (estilo OmniRoute) | Assinaturas do dono viram capacidade do Norte; caminho crítico sempre em API key; risco de ToS isolado, com fallback automático |

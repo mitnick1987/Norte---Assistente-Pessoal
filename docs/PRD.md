@@ -38,7 +38,7 @@ Duas teses inegociáveis orientam todo o design:
 ### Não-objetivos da v1
 
 - Multi-usuário / SaaS / onboarding de terceiros — é um sistema pessoal de um usuário só; nenhuma decisão de arquitetura paga o custo de escalar.
-- App próprio (mobile ou web), dashboard ou qualquer UI fora do chat — a interface é 100% conversa no WhatsApp (e-mail apenas para alertas de infraestrutura).
+- App próprio (mobile ou web) ou qualquer UI de uso diário fora do chat — a interface do assistente é 100% conversa no WhatsApp (e-mail apenas para alertas de infraestrutura). Exceção registrada: UI local mínima de **administração** (login de contas, status de provedores e integrações) entra no M3 com o design system do MedClinic (ADR-017, ADR-012) — administração, nunca o uso diário.
 - WhatsApp Cloud API oficial (templates, janela de 24h, custo por conversa) — a v1 aposta na Evolution API não-oficial com mitigações; migração fica como plano B documentado.
 - Ações autônomas no mundo externo: enviar e-mails, fazer ligações, comprar, responder terceiros — nem com confirmação na v1; o assistente age só sobre os dados do próprio usuário.
 - Gamificação: streaks, badges, pontos, níveis, contadores de falha — explicitamente proibidos, não adiados.
@@ -60,8 +60,8 @@ Duas teses inegociáveis orientam todo o design:
 | Confiabilidade | Caminho crítico de lembretes 100% sem LLM (templates + jobs duráveis); briefing/revisão com fallback em template; nenhuma falha silenciosa |
 | Tom | RSD-safe hard-coded: colega adulto, neutro, zero culpa; proibido citar histórico de falhas; suite de regressão de tom no CI |
 | Proatividade | Sempre iniciada pelo assistente; teto de ~6 mensagens proativas/dia e 10–15 lembretes ativos (parâmetros em settings) |
-| Modelos de IA | Haiku 4.5 (triagem/extração/consolidação) + Sonnet 5 (conversa/priorização) com prompt caching; sem Opus |
-| Integração com agentes | Três vias: canal API nativo compatível OpenAI/Anthropic — base URL, estilo 9router (ADR-016, RF-32); servidor MCP para agentes operarem o task-store (ADR-014, RF-30); e delegação de trabalho aos CLIs Claude Code/Codex autenticados no host (ADR-015, RF-31). Registry de tools transport-agnostic desde a fundação; o Norte nunca armazena credenciais das contas dos agentes |
+| Modelos de IA | Haiku 4.5 (triagem/extração/consolidação) + Sonnet 5 (conversa/priorização) com prompt caching; sem Opus. Provedores plugáveis: API key é o padrão e o único do caminho crítico; contas de assinatura entram como provedores alternativos por função (ADR-017) |
+| Integração com agentes | Integração nativa completa com os ecossistemas OpenAI e Anthropic, em 4 vias: canal API compatível com os dois formatos — base URL, estilo 9router/OmniRoute (ADR-016, RF-32); servidor MCP para Claude Code/Codex operarem o task-store (ADR-014, RF-30); delegação de trabalho aos CLIs autenticados no host (ADR-015, RF-31); e contas Claude/ChatGPT como provedores do cérebro com login pela UI (ADR-017, RF-33). Registry de tools transport-agnostic desde a fundação |
 | Dados | 100% no VPS próprio + backup contínuo cifrado; deleção sempre lógica; nada de analytics de terceiros |
 | Posicionamento | Ferramenta de suporte de função executiva, complementar a tratamento; sem linguagem clínica |
 
@@ -228,6 +228,12 @@ Duas teses inegociáveis orientam todo o design:
 - Mensagens entram no mesmo funil do WhatsApp (triagem → executor/brain → task-store); auditoria com origem `api`; rate limit próprio do canal.
 - O canal conversa com o Norte — não é proxy nem roteador de outros modelos.
 
+### RF-33 — Contas Claude/OpenAI como provedores do cérebro + UI de administração (M3)
+
+- Login OAuth com contas Claude e OpenAI/ChatGPT pela UI local de administração (mesmo fluxo dos CLIs oficiais, estilo OmniRoute); tokens cifrados em `auth_tokens` com refresh automático e alerta em falha (ADR-017).
+- Provedores plugáveis em `core/llm`, roteados por função: caminho crítico (briefing, triagem, cobranças) **sempre** na API key; conversa livre e consultas via MCP/canal API podem usar as assinaturas; falha/suspensão de conta degrada com fallback automático para API key e aviso no chat.
+- UI local servida pelo próprio brain com o design system do MedClinic (ADR-012): contas conectadas, validade de tokens, provedor ativo por função, uso e custo; risco de ToS do uso de OAuth de assinatura fora dos clientes oficiais documentado e aceito conscientemente (ADR-017).
+
 ### RF-24 — Proatividade adaptativa (M3)
 
 - Tabela `patterns` acumula horários de resposta, ignorados e pedidos de silêncio; briefing desliza para o horário real de despertar e cobranças migram para janelas de resposta.
@@ -312,7 +318,7 @@ Duas teses inegociáveis orientam todo o design:
 |---|---|---|
 | M1 — Núcleo confiável (MVP) | RF-01..RF-15: infra (Docker Compose local com perfil de produção pronto — Evolution 2.3.7; Caddy/Litestream/Healthchecks entram na migração para o VPS, ADR-013), captura texto+áudio, task-store, scheduler durável, cadeias de lembrete, briefing e revisão com fallback, executor determinístico, fechamento de loop, "qual a próxima?", modo retorno sem culpa, higiene da lista, Google Calendar, watchdog/alertas, tom RSD-safe com testes, monitor de custo. Valor na 1ª semana: capturar por áudio, briefing com agenda real, nunca mais perder compromisso. | 5–6 semanas (uma pessoa + IA): sem. 1 infra local + Evolution + adapter; sem. 2–3 task-store + scheduler + captura + cadeias; sem. 4–5 rituais + loop + Calendar + modo retorno; sem. 6 hardening, testes de falha injetada e de tom, migração para o VPS e restore de backup |
 | M2 — Destravar e conhecer | RF-16..RF-23, RF-30 e RF-32: foto/print e encaminhamento viram compromisso (vision), micropassos e "só 5 minutos", if-then contextualizado, memória de longo prazo (facts + Batch API), sessões de foco, planejamento por energia, Gmail no briefing, planejamento por capacidade real, servidor MCP e canal API nativo para Claude Code/Codex. | 3–4 semanas, começando após ≥ 2 semanas de uso real do M1 (o uso calibra prioridades e prompts) |
-| M3 — Adaptar e centralizar | RF-24..RF-29 e RF-31: proatividade adaptativa por patterns, boletos por foto, integração com ferramenta de trabalho, retrospectiva mensal, canal de contingência Telegram testado, checklist de preparação nos alertas de saída, delegação de trabalho aos CLIs Claude Code/Codex. | 4–6 semanas, intercaladas com operação — itens independentes, entregáveis um a um conforme o uso pedir |
+| M3 — Adaptar e centralizar | RF-24..RF-29, RF-31 e RF-33: proatividade adaptativa por patterns, boletos por foto, integração com ferramenta de trabalho, retrospectiva mensal, canal de contingência Telegram testado, checklist de preparação nos alertas de saída, delegação de trabalho aos CLIs Claude Code/Codex, contas como provedores + UI de administração. | 4–6 semanas, intercaladas com operação — itens independentes, entregáveis um a um conforme o uso pedir |
 | Operação contínua | Ajuste de prompts por feedback real, revisão do formato do briefing quando a taxa de resposta cair (anti-habituação), upgrade testado da Evolution, teste trimestral do adapter Telegram, restore de backup a cada milestone. | ~2–4 h/semana em regime permanente |
 
 Critério de saída do M1: uma semana de operação **no VPS** com 100% de entrega de lembretes antes de iniciar o M2 (a fase de construção roda local — ADR-013; as metas de confiabilidade do §7 valem integralmente a partir do VPS).
