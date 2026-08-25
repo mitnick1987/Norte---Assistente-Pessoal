@@ -42,6 +42,7 @@ Decisões-chave:
 - **Caminho crítico sem partes móveis frágeis:** jobs duráveis no SQLite com catch-up no boot, entrega confirmada só pós-2xx, retry exponencial, e nenhuma falha silenciosa (watchdog interno + dead man's switch externo + e-mail).
 - **Monolito modular, não microserviços:** um processo Node, mas internamente organizado em módulos plugáveis com fronteiras impostas por lint (§2) — é o que permite crescer para MUITAS funcionalidades sem virar uma bola de lama.
 - **Adapter em toda borda externa:** WhatsApp (Evolution → WAHA/Telegram em dias), STT (Groq → OpenAI), LLM (cliente único com estratégia de modelos). Nenhum fornecedor é ponto de acoplamento estrutural.
+- **Tools declaradas uma vez, servidas em dois transportes:** o registry de tools do kernel é transport-agnostic — alimenta o tool use do brain e o servidor MCP para agentes externos (Claude Code, Codex — ADR-014); na direção inversa, o Norte dispara os CLIs desses agentes por subprocesso headless com login delegado a eles (ADR-015).
 
 ---
 
@@ -65,6 +66,7 @@ Decisões-chave:
 │   │   ├── outbox/             envio de mensagens: fila, confirmação pós-2xx, delay aleatório, sendPresence, teto diário de proativas
 │   │   ├── llm/                cliente Claude: triagem (Haiku), brain (Sonnet), Batch API; prompt caching byte-estável; monitor de custo
 │   │   ├── channel/            interface Channel + registry: whatsapp-evolution (ativo), telegram (dormente, M3)
+│   │   ├── mcp/                servidor MCP sobre o registry de tools do kernel — Claude Code/Codex operam o Norte (M2, ADR-014)
 │   │   ├── stt/                interface de transcrição: groq (ativo), openai-whisper (fallback)
 │   │   └── settings/           chaves tipadas com defaults declarados pelos módulos
 │   ├── modules/                CAPACIDADES PLUGÁVEIS — uma pasta = uma funcionalidade
@@ -83,7 +85,8 @@ Decisões-chave:
 │   │   └── integrations/
 │   │       ├── google-calendar/  (RF-12, M1)
 │   │       ├── gmail/            (RF-22, M2)
-│   │       └── work/             conector plugável Jira/Trello/Linear (RF-26, M3)
+│   │       ├── work/             conector plugável Jira/Trello/Linear (RF-26, M3)
+│   │       └── code-agents/      dispara Claude Code/Codex CLI headless com guardrails (RF-31, M3, ADR-015)
 │   ├── infra-ops/              watchdog CONNECTION_UPDATE, ping Healthchecks, alertas por e-mail, métricas de entrega
 │   └── app.ts                  composição: lista explícita de módulos ativos por fase (M1 liga 10, M2/M3 acrescentam)
 └── tests/                      unit (domínio puro), integração (webhook→resposta), cenários (tom, falha injetada)
@@ -314,3 +317,5 @@ Erro que ninguém vê não existe até virar incidente — e aqui incidente sign
 | [ADR-011](adr/ADR-011-monolito-modular-manifesto.md) | Monolito modular: kernel + módulos com manifesto, fronteiras por lint | Exigência do dono: muitas funcionalidades futuras; adicionar capacidade = nova pasta em `modules/`, sem tocar no resto |
 | [ADR-012](adr/ADR-012-design-system-medclinic.md) | Qualquer UI futura usa o design system do MedClinic | Consistência entre os produtos do dono: Tailwind v4, paleta zinc dark-first + emerald, componentes de `ui.tsx`, tema claro por remapeamento de variáveis |
 | [ADR-013](adr/ADR-013-operacao-inicial-local.md) | Operação inicial local (Compose perfil `local`); VPS no hardening do M1 | Iteração rápida e sem custo na construção; catch-up no boot torna o gap tolerável; saída do M1 exige uma semana 100% no VPS |
+| [ADR-014](adr/ADR-014-integracao-mcp.md) | Servidor MCP como segundo transporte do registry de tools | Claude Code/Codex operam o Norte com 1 servidor para N agentes; validação única no backend; registry transport-agnostic desde a FEAT-001 |
+| [ADR-015](adr/ADR-015-orquestracao-cli-agentes.md) | Norte dispara Claude Code/Codex CLI headless; login delegado aos CLIs | Zero credencial de conta no Norte; guardrails bloqueantes (allowlist de diretórios, confirmação no chat, auditoria) |
