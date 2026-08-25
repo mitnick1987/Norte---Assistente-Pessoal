@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Gera/atualiza o documento de handoff de {{PROJETO}} — fotografia fiel do estado do projeto para outro dev assumir. Use no fim de cada milestone, antes de pausas longas ou quando o usuário pedir.
+description: Gera/atualiza o documento de handoff de Norte — fotografia fiel do estado do projeto para outro dev assumir. Use no fim de cada milestone, antes de pausas longas ou quando o usuário pedir.
 ---
 
 # /handoff — documento de passagem de bastão

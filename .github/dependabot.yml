@@ -1,0 +1,21 @@
+# Atualização automatizada de dependências — exigida por docs/SECURITY.md §6.
+# PRs de atualização passam pelos mesmos gates de CI; major exige review humano.
+version: 2
+updates:
+  # Actions do próprio CI — válido para qualquer stack.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Dependências npm da raiz (monolito modular, sem workspaces separados)
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-e-patch:
+        update-types: ["minor", "patch"]

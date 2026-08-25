@@ -1,4 +1,4 @@
-# Contribuindo com {{PROJETO}}
+# Contribuindo com Norte
 
 Guia de onboarding. Meta: você entender o projeto e entregar sua primeira mudança seguindo o processo, sem depender de ninguém.
 
@@ -33,7 +33,18 @@ Não usa Claude? O processo é o mesmo — os documentos de `docs/process/` desc
 
 ## 4. Setup local
 
-<!-- ADAPTE: preencha com os comandos reais do projeto: clone, subida do ambiente local, migrações, seeds e execução dos testes. -->
+O código nasce na `FEAT-001`. Por enquanto: clone o repo e leia os docs na ordem da seção 1 acima — não há ambiente para subir ainda.
+
+Quando o código existir (a partir da FEAT-001):
+
+```
+npm ci
+cp .env.example .env
+npm run dev
+npm test
+```
+
+Docker Compose (VPS: Caddy, Evolution API, brain, Litestream) fica em `infra/`, criado na FEAT-001.
 
 ## 5. Dúvidas
 

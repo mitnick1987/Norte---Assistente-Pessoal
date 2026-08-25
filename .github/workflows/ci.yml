@@ -1,8 +1,11 @@
 # =============================================================================
-# ATENÇÃO: este workflow é um ESQUELETO — ele NÃO funciona como está.
-# Antes de usar em {{PROJETO}}, substitua todo comando marcado com "ADAPTE"
-# pelo comando real da stack definida em docs/ARCHITECTURE.md. Cada step não
-# adaptado falha de propósito (exit 1) para nenhum gate passar em silêncio.
+# CI do Norte (Node 22 + TypeScript + Fastify + SQLite, ver docs/ARCHITECTURE.md).
+#
+# Bootstrap: o código de aplicação nasce na FEAT-001 — até lá o repo é só
+# documentação e não existe package.json. Os steps que dependem de package.json
+# são condicionados à existência dele (hashFiles('package.json') != ''), com um
+# aviso no lugar, para que PRs de docs passem com CI verde desde já. Essas
+# condições de bootstrap saem assim que a FEAT-001 mergear o scaffold.
 #
 # Gates obrigatórios do processo (docs/process/DEVELOPMENT_PROCESS.md):
 # lint, typecheck, testes com cobertura, build e scan de segurança.
@@ -30,44 +33,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup do runtime
-        # ADAPTE: setup do runtime e do gerenciador de pacotes da stack, com
-        # cache de dependências (use a action oficial de setup da linguagem).
-        run: 'echo "ADAPTE: setup do runtime da stack" && exit 1'
+      - name: Verificar existência do scaffold (FEAT-001)
+        id: scaffold
+        run: |
+          if [ -f package.json ]; then
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup do Node
+        if: steps.scaffold.outputs.existe == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
       - name: Instalar dependências
-        # ADAPTE: instalação com lockfile travado — o build deve falhar se o
-        # lockfile divergir do manifesto.
-        run: 'echo "ADAPTE: comando de instalação com lockfile travado" && exit 1'
-
-      - name: Build dos pacotes compartilhados
-        # ADAPTE: se os apps dependem de pacotes compartilhados buildados
-        # (tipos, contratos), builde-os antes do typecheck; senão, remova.
-        run: 'echo "ADAPTE: build dos pacotes compartilhados (ou remova o step)" && exit 1'
+        if: steps.scaffold.outputs.existe == 'true'
+        run: npm ci
 
       - name: Lint
-        # ADAPTE: comando de lint da stack.
-        run: 'echo "ADAPTE: comando de lint" && exit 1'
+        if: steps.scaffold.outputs.existe == 'true'
+        run: npm run lint
 
       - name: Typecheck
-        # ADAPTE: checagem de tipos no modo estrito da linguagem.
-        run: 'echo "ADAPTE: comando de typecheck" && exit 1'
+        if: steps.scaffold.outputs.existe == 'true'
+        run: npx tsc --noEmit
 
       - name: Testes (com cobertura)
-        # ADAPTE: testes unitários com relatório de cobertura. O gate mínimo
-        # de cobertura está em docs/TESTING.md e deve falhar o build quando
-        # não for atingido.
-        run: 'echo "ADAPTE: comando de testes com cobertura" && exit 1'
-
-      - name: Testes de integração
-        # ADAPTE: testes de integração (banco/serviços reais em container,
-        # conforme docs/TESTING.md); remova enquanto o projeto não tiver
-        # essa suite.
-        run: 'echo "ADAPTE: comando de testes de integração (ou remova o step)" && exit 1'
+        if: steps.scaffold.outputs.existe == 'true'
+        run: npm test
 
       - name: Build
-        # ADAPTE: build de produção de todos os apps e pacotes.
-        run: 'echo "ADAPTE: comando de build" && exit 1'
+        if: steps.scaffold.outputs.existe == 'true'
+        run: npm run build
+
+      - name: Aguardando scaffold da FEAT-001
+        if: steps.scaffold.outputs.existe == 'false'
+        run: echo "Sem package.json ainda — repo só com documentação. Lint/typecheck/testes/build entram quando a FEAT-001 criar o scaffold."
 
   security:
     name: Gates de segurança
@@ -79,13 +83,23 @@ jobs:
           fetch-depth: 0
 
       - name: Secret scanning
-        # ADAPTE: plugue a ferramenta de secret scanning do time (uma action
-        # que varra o histórico do repositório). Gate: qualquer secret
-        # encontrado falha o build.
-        run: 'echo "ADAPTE: ferramenta de secret scanning" && exit 1'
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verificar existência do scaffold (FEAT-001)
+        id: scaffold
+        run: |
+          if [ -f package.json ]; then
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Auditoria de dependências
-        # ADAPTE: auditoria de vulnerabilidades do gerenciador de pacotes da
-        # stack. Gate: vulnerabilidade de severidade high ou acima falha o
-        # build.
-        run: 'echo "ADAPTE: comando de auditoria de dependências (gate >= high)" && exit 1'
+        if: steps.scaffold.outputs.existe == 'true'
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Aguardando scaffold da FEAT-001
+        if: steps.scaffold.outputs.existe == 'false'
+        run: echo "Sem package.json ainda — repo só com documentação. Auditoria de dependências entra quando a FEAT-001 criar o scaffold."

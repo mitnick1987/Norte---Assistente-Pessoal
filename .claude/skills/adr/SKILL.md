@@ -1,6 +1,6 @@
 ---
 name: adr
-description: Registra uma decisão de arquitetura (ADR) de {{PROJETO}}. Use quando uma escolha técnica com impacto duradouro for tomada — ou quando o usuário pedir para registrar/revisar uma decisão.
+description: Registra uma decisão de arquitetura (ADR) de Norte. Use quando uma escolha técnica com impacto duradouro for tomada — ou quando o usuário pedir para registrar/revisar uma decisão.
 ---
 
 # /adr — registro de decisão de arquitetura

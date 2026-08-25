@@ -14,5 +14,12 @@ Thumbs.db
 # Claude Code — estado local, não versiona
 .claude/settings.local.json
 
-# ADAPTE: acrescente os diretórios de dependências e build da stack
-# (ex.: node_modules/, dist/, coverage/, target/, __pycache__/, .venv/).
+# Node — dependências e build
+node_modules/
+dist/
+coverage/
+
+# SQLite — banco local (WAL) não versiona; só a estrutura via migrações
+*.db
+*.db-wal
+*.db-shm

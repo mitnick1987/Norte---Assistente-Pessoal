@@ -1,6 +1,6 @@
-# {{PROJETO}}
+# Norte
 
-{{DESCRICAO}} <!-- ADAPTE: descrição de uma linha do produto — a mesma do CLAUDE.md. -->
+Assistente pessoal para TDAH que mora no WhatsApp: captura sem atrito, lembra na hora certa, cobra sem culpa e prioriza o dia por você.
 
 Stack: a definida em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -19,7 +19,18 @@ Specs de feature em `docs/features/`; decisões de arquitetura em `docs/adr/`.
 
 ## Setup local
 
-<!-- ADAPTE: comandos reais do projeto: clone, subida do ambiente local, migrações, seeds e execução dos testes. Mantenha em sincronia com a seção de setup do CONTRIBUTING.md. -->
+O código nasce na `FEAT-001`. Por enquanto, o repo é só documentação — clone e leia os docs na ordem do [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Quando o código existir (a partir da FEAT-001):
+
+```
+npm ci
+cp .env.example .env
+npm run dev
+npm test
+```
+
+Docker Compose (VPS, `infra/`) é criado na FEAT-001 junto com a fundação do backend.
 
 ## Contribuindo
 
