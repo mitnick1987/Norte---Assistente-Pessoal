@@ -53,7 +53,7 @@ Duas teses inegociáveis orientam todo o design:
 
 | Aspecto | Decisão v1 |
 |---|---|
-| Modo de operação | Sistema pessoal single-user, rodando 24/7 em VPS próprio; sem contas, sem onboarding de terceiros |
+| Modo de operação | Sistema pessoal single-user; construção e operação inicial na máquina local do dono (Docker Compose), migração para VPS 24/7 no hardening do M1 (ADR-013); sem contas, sem onboarding de terceiros |
 | Canal | WhatsApp via Evolution API (pinada na última estável, 2.3.7), em **número secundário dedicado** — nunca o número principal do usuário |
 | Interface | 100% conversa; menus de texto numerado (1/2/3); botões/listas/enquetes do WhatsApp banidos do design |
 | Fonte da verdade | Task-store determinístico em SQLite; o LLM interpreta e conversa, mas **nunca é o registro** (anti-alucinação de compromissos) |
@@ -291,12 +291,12 @@ Duas teses inegociáveis orientam todo o design:
 
 | Fase | Escopo | Estimativa |
 |---|---|---|
-| M1 — Núcleo confiável (MVP) | RF-01..RF-15: infra (VPS, Docker, Evolution 2.3.7, Caddy, Litestream, Healthchecks.io), captura texto+áudio, task-store, scheduler durável, cadeias de lembrete, briefing e revisão com fallback, executor determinístico, fechamento de loop, "qual a próxima?", modo retorno sem culpa, higiene da lista, Google Calendar, watchdog/alertas, tom RSD-safe com testes, monitor de custo. Valor na 1ª semana: capturar por áudio, briefing com agenda real, nunca mais perder compromisso. | 5–6 semanas (uma pessoa + IA): sem. 1 infra + Evolution + adapter; sem. 2–3 task-store + scheduler + captura + cadeias; sem. 4–5 rituais + loop + Calendar + modo retorno; sem. 6 hardening, testes de falha injetada e de tom, restore de backup |
+| M1 — Núcleo confiável (MVP) | RF-01..RF-15: infra (Docker Compose local com perfil de produção pronto — Evolution 2.3.7; Caddy/Litestream/Healthchecks entram na migração para o VPS, ADR-013), captura texto+áudio, task-store, scheduler durável, cadeias de lembrete, briefing e revisão com fallback, executor determinístico, fechamento de loop, "qual a próxima?", modo retorno sem culpa, higiene da lista, Google Calendar, watchdog/alertas, tom RSD-safe com testes, monitor de custo. Valor na 1ª semana: capturar por áudio, briefing com agenda real, nunca mais perder compromisso. | 5–6 semanas (uma pessoa + IA): sem. 1 infra local + Evolution + adapter; sem. 2–3 task-store + scheduler + captura + cadeias; sem. 4–5 rituais + loop + Calendar + modo retorno; sem. 6 hardening, testes de falha injetada e de tom, migração para o VPS e restore de backup |
 | M2 — Destravar e conhecer | RF-16..RF-23: foto/print e encaminhamento viram compromisso (vision), micropassos e "só 5 minutos", if-then contextualizado, memória de longo prazo (facts + Batch API), sessões de foco, planejamento por energia, Gmail no briefing, planejamento por capacidade real. | 3–4 semanas, começando após ≥ 2 semanas de uso real do M1 (o uso calibra prioridades e prompts) |
 | M3 — Adaptar e centralizar | RF-24..RF-29: proatividade adaptativa por patterns, boletos por foto, integração com ferramenta de trabalho, retrospectiva mensal, canal de contingência Telegram testado, checklist de preparação nos alertas de saída. | 4–6 semanas, intercaladas com operação — itens independentes, entregáveis um a um conforme o uso pedir |
 | Operação contínua | Ajuste de prompts por feedback real, revisão do formato do briefing quando a taxa de resposta cair (anti-habituação), upgrade testado da Evolution, teste trimestral do adapter Telegram, restore de backup a cada milestone. | ~2–4 h/semana em regime permanente |
 
-Critério de saída do M1: uma semana de operação com 100% de entrega de lembretes antes de iniciar o M2.
+Critério de saída do M1: uma semana de operação **no VPS** com 100% de entrega de lembretes antes de iniciar o M2 (a fase de construção roda local — ADR-013; as metas de confiabilidade do §7 valem integralmente a partir do VPS).
 
 ---
 
@@ -318,6 +318,7 @@ Critério de saída do M1: uma semana de operação com 100% de entrega de lembr
 | Novidade que passa (lacuna nº 1 dos apps TDAH: motivação além das primeiras semanas) | Variação de formulação, ajuste por feedback explícito ("menos mensagens de manhã"), revisão do formato do briefing quando a taxa de resposta cair, retrospectiva mensal com UMA sugestão de ajuste |
 | Manutenção de longo prazo por uma pessoa só | Monolito, uma linguagem, uma persistência, dependências mínimas pinadas, restore de backup testado a cada milestone — mantibilidade em 2 anos como critério de toda decisão |
 | Posicionamento clínico indevido ou dependência sem senso crítico | Enquadramento explícito como ferramenta de suporte de função executiva, complementar a tratamento; sem linguagem clínica; design evita criar ansiedade de checagem |
+| Operação local no M1: lembretes não disparam com a máquina desligada | Risco aceito e temporário (ADR-013): catch-up no boot dispara o represado ao ligar; migração para VPS é etapa obrigatória do hardening e pré-requisito da saída do M1 |
 
 **Custo mensal estimado:** US$18–32/mês, orçado no preço cheio do Sonnet 5 (pós-31/08/2026): VPS 2GB US$5–9 · API Anthropic US$10–20 (Haiku + Sonnet com caching + Batch API noturna) · STT Groq < US$1 · backup Backblaze B2 < US$1 · Healthchecks.io e Litestream grátis · chip pré-pago dedicado ~R$15.
 

@@ -2,7 +2,7 @@
 
 **Versão:** 0.1 · **Data:** 2026-08-25 · Referências: [PRD.md](PRD.md) · [SECURITY.md](SECURITY.md) · [TESTING.md](TESTING.md)
 
-Stack: **sem frontend na v1 — UI 100% conversacional no WhatsApp (UIs futuras: Next.js + Tailwind v4 com o design system do MedClinic, ver ADR-012) · Node.js 22 + TypeScript strict com Fastify (backend) · SQLite WAL via better-sqlite3 · VPS com Docker Compose (Caddy TLS, Evolution API 2.3.7, Litestream → Backblaze B2, Healthchecks.io)**.
+Stack: **sem frontend na v1 — UI 100% conversacional no WhatsApp (UIs futuras: Next.js + Tailwind v4 com o design system do MedClinic, ver ADR-012) · Node.js 22 + TypeScript strict com Fastify (backend) · SQLite WAL via better-sqlite3 · Docker Compose — local durante a construção do M1, VPS 24/7 a partir do hardening (ADR-013) — com Caddy TLS, Evolution API 2.3.7, Litestream → Backblaze B2 e Healthchecks.io no perfil de produção**.
 
 Toda escolha técnica com impacto duradouro tem ADR em [docs/adr/](adr/) (ver §7).
 
@@ -15,7 +15,7 @@ flowchart TB
     U["Usuário (WhatsApp no celular)"] <--> META["Rede WhatsApp (Meta)"]
     META <--> EVO["Evolution API 2.3.7<br/>(container; Postgres 15 + Redis exclusivos dela)"]
 
-    subgraph VPS["VPS (Docker Compose, 24/7)"]
+    subgraph VPS["Docker Compose (local no M1 → VPS 24/7, ADR-013)"]
         CADDY["Caddy (TLS, única porta exposta)"]
         EVO
         BRAIN["norte-brain<br/>monolito modular Node 22 + TS (Fastify)"]
@@ -53,7 +53,7 @@ Decisões-chave:
 .
 ├── docs/                       PRD, arquitetura, segurança, testes, ADRs, specs de feature
 ├── infra/
-│   ├── docker-compose.yml      caddy, evolution (pinada 2.3.7), postgres+redis da evolution, brain, litestream
+│   ├── docker-compose.yml      perfis local/producao (ADR-013): evolution (pinada 2.3.7), postgres+redis dela, brain; producao soma caddy e litestream
 │   ├── Caddyfile               TLS; única superfície exposta (/webhook, /health)
 │   └── litestream.yml          replicação SQLite → Backblaze B2
 ├── src/
@@ -313,3 +313,4 @@ Erro que ninguém vê não existe até virar incidente — e aqui incidente sign
 | [ADR-010](adr/ADR-010-oauth-google-producao.md) | OAuth Google como app External "In Production", escopos mínimos | Refresh token de modo Testing expira em 7 dias e quebra em silêncio |
 | [ADR-011](adr/ADR-011-monolito-modular-manifesto.md) | Monolito modular: kernel + módulos com manifesto, fronteiras por lint | Exigência do dono: muitas funcionalidades futuras; adicionar capacidade = nova pasta em `modules/`, sem tocar no resto |
 | [ADR-012](adr/ADR-012-design-system-medclinic.md) | Qualquer UI futura usa o design system do MedClinic | Consistência entre os produtos do dono: Tailwind v4, paleta zinc dark-first + emerald, componentes de `ui.tsx`, tema claro por remapeamento de variáveis |
+| [ADR-013](adr/ADR-013-operacao-inicial-local.md) | Operação inicial local (Compose perfil `local`); VPS no hardening do M1 | Iteração rápida e sem custo na construção; catch-up no boot torna o gap tolerável; saída do M1 exige uma semana 100% no VPS |
