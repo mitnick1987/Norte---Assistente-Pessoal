@@ -1,0 +1,5 @@
+# Perfil "producao" (ADR-013) — única porta exposta no host (SECURITY.md §5).
+# Não exercitado no M1 (operação local); domínio real entra no hardening.
+{$NORTE_DOMAIN} {
+	reverse_proxy brain:3000
+}
