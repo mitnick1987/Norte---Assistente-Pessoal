@@ -15,7 +15,7 @@ describe('EmailAlerter', () => {
     expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
-  it('loga em error quando o transporte está configurado', async () => {
+  it('loga em error quando o transporte está configurado, sem incluir o e-mail do dono (PII) no payload', async () => {
     const logger = silentLogger() as { error: ReturnType<typeof vi.fn> };
     const alerter = new EmailAlerter(
       { smtpUrl: 'smtp://localhost:1025', alertEmail: 'dono@example.com' },
@@ -26,6 +26,8 @@ describe('EmailAlerter', () => {
 
     expect(logger.error).toHaveBeenCalledTimes(1);
     const [payload] = logger.error.mock.calls[0] as [Record<string, unknown>];
-    expect(payload['alertEmail']).toBe('dono@example.com');
+    expect(payload['message']).toEqual({ id: 2, jid: 'y', attempts: 5 });
+    expect(payload['alertEmail']).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain('dono@example.com');
   });
 });

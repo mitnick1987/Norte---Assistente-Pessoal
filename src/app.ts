@@ -1,4 +1,7 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import Fastify from 'fastify';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import type { Database } from 'better-sqlite3';
@@ -15,6 +18,7 @@ import {
   EvolutionClient,
   ConnectionWatchdog,
   registerEvolutionWebhookRoute,
+  provisionEvolutionWebhook,
 } from './core/channel/whatsapp-evolution/index.js';
 import { registerHealthRoute } from './core/health/index.js';
 import { EmailAlerter } from './infra-ops/index.js';
@@ -24,8 +28,27 @@ import { echoModule } from './modules/echo/index.js';
 // módulos de domínio conforme forem chegando; por ora só a prova de conceito.
 const ACTIVE_MODULES = [echoModule];
 
-const BUILD_VERSION = process.env['npm_package_version'] ?? '0.0.0';
 const OUTBOX_INTERVAL_MS = 5_000;
+
+/**
+ * npm_package_version só existe quando o processo nasce de `npm run` — o
+ * container roda `node dist/app.js` direto (infra/Dockerfile), então a env
+ * var nunca chega lá. Resolvemos por import.meta.url em vez de cwd: em
+ * dist/app.js o package.json vive um nível acima; em dev (tsx, src/app.ts)
+ * idem, um nível acima da raiz do código-fonte.
+ */
+function resolveBuildVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const raw = readFileSync(join(here, '..', 'package.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === 'string' && parsed.version.length > 0 ? parsed.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+const BUILD_VERSION = resolveBuildVersion();
 
 export interface App {
   readonly fastify: FastifyInstance;
@@ -41,6 +64,8 @@ export interface BuildAppOverrides {
   /** Só para teste de integração — nunca usado no boot real (TESTING.md §7). */
   readonly outboxSleep?: (ms: number) => Promise<void>;
   readonly outboxRandom?: () => number;
+  /** Desliga o autoprovisionamento do webhook — testes de integração não têm Evolution real para chamar. */
+  readonly provisionWebhook?: boolean;
 }
 
 export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
@@ -132,7 +157,25 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
       }, OUTBOX_INTERVAL_MS);
       outboxTimer.unref();
 
-      await fastify.listen({ port: env.PORT, host: '127.0.0.1' });
+      await fastify.listen({ port: env.PORT, host: env.HOST });
+
+      // Dispara depois do listen (o brain já está pronto para receber) e
+      // sem bloquear o boot: a Evolution pode demorar a aceitar chamadas de
+      // API mesmo já respondendo ao healthcheck, e isso não pode atrasar o
+      // brain a ficar no ar. Erros e retries já ficam logados dentro da
+      // própria função — nunca falha em silêncio (SECURITY.md §6).
+      if (overrides.provisionWebhook !== false) {
+        void provisionEvolutionWebhook(
+          {
+            evolutionApiUrl: env.EVOLUTION_API_URL,
+            evolutionApiKey: env.EVOLUTION_API_KEY,
+            instance: env.EVOLUTION_INSTANCE,
+            webhookUrl: env.BRAIN_WEBHOOK_URL,
+            webhookSecret: env.EVOLUTION_WEBHOOK_SECRET,
+          },
+          logger,
+        );
+      }
     },
     async stop() {
       scheduler.stop();

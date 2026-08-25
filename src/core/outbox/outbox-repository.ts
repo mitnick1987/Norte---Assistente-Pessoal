@@ -53,10 +53,17 @@ export class OutboxRepository {
     return row?.count ?? 0;
   }
 
-  markSending(id: number): void {
-    this.db
-      .prepare(`UPDATE outbox_messages SET status = 'sending', updated_at = datetime('now') WHERE id = ?`)
+  /**
+   * Claim atômico: só transiciona quem ainda está `pending`. Duas execuções
+   * concorrentes de processPending (tick do scheduler + disparo direto, ou
+   * dois ticks intercalados por um sleep) nunca conseguem as duas marcar a
+   * mesma linha como `sending` — a segunda vê `changes === 0` e desiste.
+   */
+  claimForSending(id: number): boolean {
+    const result = this.db
+      .prepare(`UPDATE outbox_messages SET status = 'sending', updated_at = datetime('now') WHERE id = ? AND status = 'pending'`)
       .run(id);
+    return result.changes > 0;
   }
 
   markDelivered(id: number, deliveredAt: Date): void {

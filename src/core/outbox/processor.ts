@@ -5,6 +5,7 @@ import {
   randomSendDelayMs,
   retriesExhausted,
 } from './domain/index.js';
+import { startOfZonedDay, zonedTimeToUtc } from '../scheduler/domain/timezone.js';
 import type { OutboxRepository, OutboxMessageRow } from './outbox-repository.js';
 import type { MessageSender } from './sender.js';
 import type { FailureAlerter } from './alerter.js';
@@ -28,8 +29,6 @@ export interface OutboxProcessorDeps {
   random?: () => number;
 }
 
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
-
 /**
  * Processa a fila pendente: aplica o teto diário de proativas no backend
  * (nunca só no prompt), aguarda o delay anti-banimento + sendPresence antes
@@ -40,6 +39,13 @@ export class OutboxProcessor {
   private readonly now: () => Date;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
+  /**
+   * Guard de execução única: processo único (ADR-004), então uma flag em
+   * memória basta. Sem isso, o tick de 5s do timer e um disparo direto
+   * (ex.: outro caminho que force o processamento) podem se intercalar
+   * durante o sleep do delay anti-banimento e enviar a mesma mensagem 2x.
+   */
+  private isRunning = false;
 
   constructor(private readonly deps: OutboxProcessorDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -48,15 +54,28 @@ export class OutboxProcessor {
   }
 
   async processPending(): Promise<void> {
-    const pending = this.deps.repository.findPending(this.now().toISOString());
-    for (const message of pending) {
-      await this.processOne(message);
+    if (this.isRunning) {
+      this.deps.logger.warn('processPending já em execução, tick ignorado');
+      return;
+    }
+
+    this.isRunning = true;
+    try {
+      const pending = this.deps.repository.findPending(this.now().toISOString());
+      for (const message of pending) {
+        await this.processOne(message);
+      }
+    } finally {
+      this.isRunning = false;
     }
   }
 
   private async processOne(message: OutboxMessageRow): Promise<void> {
     if (message.is_proactive) {
-      const sinceIso = new Date(this.now().getTime() - DAY_IN_MS).toISOString();
+      // Dia civil de America/Sao_Paulo, não janela rolante de 24h — o teto
+      // "diário" tem que zerar à meia-noite local, não 24h atrás de agora
+      // (CODE_STYLE §2, daily-cap.ts).
+      const sinceIso = zonedTimeToUtc(startOfZonedDay(this.now())).toISOString();
       const sentToday = this.deps.repository.countProactiveSentSince(sinceIso);
       if (proactiveCapReached(sentToday, this.deps.dailyProactiveCap)) {
         this.deps.logger.warn({ messageId: message.id }, 'teto diário de proativas atingido, mensagem represada');
@@ -64,7 +83,11 @@ export class OutboxProcessor {
       }
     }
 
-    this.deps.repository.markSending(message.id);
+    // Claim atômico: se outra execução já pegou essa linha entre o
+    // findPending e aqui, desiste sem reenviar (evita duplicar envio).
+    if (!this.deps.repository.claimForSending(message.id)) {
+      return;
+    }
 
     try {
       if (message.is_proactive) {

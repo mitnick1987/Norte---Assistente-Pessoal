@@ -39,12 +39,16 @@ services:
       DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD}@postgres:5432/evolution
       CACHE_REDIS_ENABLED: 'true'
       CACHE_REDIS_URI: redis://redis:6379
-      WEBHOOK_GLOBAL_URL: http://brain:3000/webhook/evolution
-      WEBHOOK_GLOBAL_ENABLED: 'true'
     networks: [norte_internal]
-    # perfil local: porta só em localhost, nunca em 0.0.0.0 (SECURITY.md §5).
-    ports:
-      - '127.0.0.1:8080:8080'
+    # Sem "ports:" aqui de propósito — profiles não escopa "ports:" dentro de
+    # uma única definição de serviço (ficaria publicado em ambos os perfis).
+    # O acesso ao painel/QR do perfil local vem de docker-compose.local.yml,
+    # combinado só quando explicitamente pedido (SECURITY.md §5, §1).
+    #
+    # WEBHOOK_GLOBAL_* removido: o brain se autoprovisiona no webhook/set da
+    # Evolution no boot (core/channel/whatsapp-evolution/webhook-provisioner.ts)
+    # porque essa env var não tem como carregar o segredo de autenticação do
+    # webhook em nenhum header confiável nesta versão pinada (2.3.7).
 
   brain:
     build:
@@ -57,6 +61,11 @@ services:
       - ../.env
     environment:
       DB_PATH: /data/norte.db
+      # HOST fica no default 0.0.0.0 do schema (core/env.ts) — o isolamento
+      # de borda já vem do "ports:" abaixo, que só publica em 127.0.0.1 do
+      # host; bind em loopback aqui dentro deixaria a Evolution sem alcançar
+      # o brain pela rede do Compose (webhook chega por eth0, não loopback).
+      BRAIN_WEBHOOK_URL: http://brain:3000/webhook/evolution
     volumes:
       - norte_db_data:/data
     networks: [norte_internal]

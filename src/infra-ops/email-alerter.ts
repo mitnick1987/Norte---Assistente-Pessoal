@@ -24,6 +24,9 @@ export class EmailAlerter implements FailureAlerter {
       this.logger.error({ message }, 'alerta de entrega esgotada sem transporte de e-mail configurado');
       return;
     }
-    this.logger.error({ message, alertEmail: this.config.alertEmail }, 'alerta de entrega esgotada');
+    // e-mail do dono é PII e não entra no log estruturado — id/jid já bastam
+    // para correlacionar o incidente (SECURITY.md §4 trata log como superfície
+    // de vazamento mesmo sem ser secret de sistema).
+    this.logger.error({ message }, 'alerta de entrega esgotada');
   }
 }

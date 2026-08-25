@@ -29,13 +29,13 @@ Pré-requisitos: Node 22, Docker Desktop (perfil `local` do Compose — ADR-013)
 
    Preencha pelo menos `EVOLUTION_API_KEY`, `EVOLUTION_POSTGRES_PASSWORD`, `EVOLUTION_WEBHOOK_SECRET` (≥ 32 caracteres) e `OWNER_WHATSAPP_JID` (o número do dono, formato `55DDDNUMERO@s.whatsapp.net`).
 
-2. Suba a Evolution API e o brain (perfil local — sem Caddy, sem Litestream, portas só em `localhost`):
+2. Suba a Evolution API e o brain (perfil local — sem Caddy, sem Litestream, portas só em `localhost`). O arquivo `docker-compose.local.yml` é o que publica a porta do painel da Evolution — nunca combinar esse override em produção:
 
    ```
-   docker compose -f infra/docker-compose.yml --profile local up
+   docker compose -f infra/docker-compose.yml -f infra/docker-compose.local.yml --profile local up
    ```
 
-3. Pareie o WhatsApp: abra o painel da Evolution (`http://localhost:8080`) com a `EVOLUTION_API_KEY`, crie/abra a instância configurada em `EVOLUTION_INSTANCE` e escaneie o QR code com o **chip dedicado do Norte** — nunca o número pessoal (ADR-005).
+3. Pareie o WhatsApp: abra o painel da Evolution (`http://localhost:8080`) com a `EVOLUTION_API_KEY`, crie/abra a instância configurada em `EVOLUTION_INSTANCE` e escaneie o QR code com o **chip dedicado do Norte** — nunca o número pessoal (ADR-005). O brain se autoprovisiona no webhook da Evolution assim que sobe (retry com backoff enquanto a Evolution não responde) — não é preciso configurar nada manualmente no painel.
 
 4. Para desenvolver fora do container (hot reload):
 

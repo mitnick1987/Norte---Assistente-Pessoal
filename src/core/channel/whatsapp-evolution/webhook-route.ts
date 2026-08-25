@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Logger } from 'pino';
 import { z } from 'zod';
@@ -21,8 +22,44 @@ export interface WebhookRouteDeps {
 }
 
 const headersSchema = z.object({
-  'x-webhook-secret': z.string().min(1),
+  'x-webhook-secret': z.string().min(1).optional(),
 });
+
+const querySchema = z.object({
+  secret: z.string().min(1).optional(),
+});
+
+/**
+ * timingSafeEqual exige buffers do mesmo tamanho — hasheamos os dois lados
+ * antes de comparar para não vazar o comprimento do segredo real via um
+ * throw de tamanho incompatível (e para nunca cair no `!==` sensível a timing).
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  const providedHash = createHash('sha256').update(provided).digest();
+  const expectedHash = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(providedHash, expectedHash);
+}
+
+/**
+ * A Evolution 2.3.7 não garante entrega de headers customizados no webhook
+ * (webhook-provisioner.ts documenta o porquê) — o provisionamento real
+ * embute o segredo na query string da URL. O header continua aceito para
+ * compatibilidade com quem chamar a rota diretamente (testes, versão futura
+ * da Evolution que suporte headers).
+ */
+function extractProvidedSecret(request: FastifyRequest): string | undefined {
+  const headerCheck = headersSchema.safeParse(request.headers);
+  if (headerCheck.success && headerCheck.data['x-webhook-secret']) {
+    return headerCheck.data['x-webhook-secret'];
+  }
+
+  const queryCheck = querySchema.safeParse(request.query);
+  if (queryCheck.success && queryCheck.data.secret) {
+    return queryCheck.data.secret;
+  }
+
+  return undefined;
+}
 
 /**
  * Única entrada HTTP externa do sistema (ARCHITECTURE.md §5). Ordem das
@@ -32,8 +69,8 @@ const headersSchema = z.object({
  */
 export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: WebhookRouteDeps): void {
   app.post('/webhook/evolution', async (request: FastifyRequest, reply: FastifyReply) => {
-    const headerCheck = headersSchema.safeParse(request.headers);
-    if (!headerCheck.success || headerCheck.data['x-webhook-secret'] !== deps.webhookSecret) {
+    const providedSecret = extractProvidedSecret(request);
+    if (!providedSecret || !secretsMatch(providedSecret, deps.webhookSecret)) {
       deps.logger.warn('webhook rejeitado: segredo ausente ou inválido');
       return reply.code(401).send({ error: 'unauthorized' });
     }
@@ -64,6 +101,15 @@ export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: Webhoo
 
     if (!isFromOwner(incoming.jid, deps.ownerJid)) {
       deps.logger.warn({ jid: incoming.jid }, 'webhook ignorado: JID diferente do dono');
+      return reply.code(200).send({ ignored: true });
+    }
+
+    // key.id é opcional no contrato (schema permissivo, webhook-schema.ts) mas
+    // o dedup depende dele: sem id o índice único parcial não pega reentregas
+    // e um payload degradado processaria o mesmo comando várias vezes
+    // (SECURITY.md §6, idempotência). Fail-closed: rejeita em vez de arriscar.
+    if (!incoming.waMessageId) {
+      deps.logger.warn({ jid: incoming.jid }, 'webhook ignorado: mensagem sem wa_message_id, dedup impossível');
       return reply.code(200).send({ ignored: true });
     }
 

@@ -8,3 +8,5 @@ export { evolutionWebhookSchema } from './webhook-schema.js';
 export type { EvolutionWebhookPayload, MessagesUpsertEvent, ConnectionUpdateEvent } from './webhook-schema.js';
 export { normalizeIncomingMessage, isEchoOfOwnMessage } from './normalize.js';
 export { isFromOwner, normalizeJid } from './owner-filter.js';
+export { provisionEvolutionWebhook } from './webhook-provisioner.js';
+export type { WebhookProvisionerConfig, WebhookProvisionerOptions } from './webhook-provisioner.js';

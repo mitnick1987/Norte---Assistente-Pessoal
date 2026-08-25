@@ -20,6 +20,16 @@ describe('loadEnv', () => {
     expect(env.DAILY_PROACTIVE_CAP).toBe(6);
   });
 
+  it('HOST assume 0.0.0.0 por padrão — bind em loopback deixaria o webhook do Compose inalcançável', () => {
+    const env = loadEnv(validEnv());
+    expect(env.HOST).toBe('0.0.0.0');
+  });
+
+  it('aceita HOST customizado via variável de ambiente', () => {
+    const env = loadEnv({ ...validEnv(), HOST: '127.0.0.1' });
+    expect(env.HOST).toBe('127.0.0.1');
+  });
+
   it('rejeita quando falta uma variável obrigatória', () => {
     const { OWNER_WHATSAPP_JID: _omit, ...rest } = validEnv();
     expect(() => loadEnv(rest)).toThrow(InvalidEnvError);

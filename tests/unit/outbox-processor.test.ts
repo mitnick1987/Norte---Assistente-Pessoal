@@ -33,7 +33,7 @@ describe('OutboxProcessor', () => {
     const row = buildRow({ id: 1 });
     const repository = {
       findPending: vi.fn().mockReturnValue([row]),
-      markSending: vi.fn(),
+      claimForSending: vi.fn().mockReturnValue(true),
       markDelivered: vi.fn(),
       countProactiveSentSince: vi.fn(),
     } as unknown as OutboxRepository;
@@ -61,7 +61,7 @@ describe('OutboxProcessor', () => {
     const row = buildRow({ id: 6 });
     const repository = {
       findPending: vi.fn().mockReturnValue([row]),
-      markSending: vi.fn(),
+      claimForSending: vi.fn().mockReturnValue(true),
       markDelivered: vi.fn(),
       countProactiveSentSince: vi.fn(),
     } as unknown as OutboxRepository;
@@ -89,7 +89,7 @@ describe('OutboxProcessor', () => {
     const row = buildRow({ id: 2 });
     const repository = {
       findPending: vi.fn().mockReturnValue([row]),
-      markSending: vi.fn(),
+      claimForSending: vi.fn().mockReturnValue(true),
       markDelivered: vi.fn(),
       markPendingForRetry: vi.fn(),
       markFailed: vi.fn(),
@@ -122,7 +122,7 @@ describe('OutboxProcessor', () => {
     const row = buildRow({ id: 3, attempts: MAX_ATTEMPTS - 1 });
     const repository = {
       findPending: vi.fn().mockReturnValue([row]),
-      markSending: vi.fn(),
+      claimForSending: vi.fn().mockReturnValue(true),
       markFailed: vi.fn(),
       incrementAttempts: vi.fn(),
       countProactiveSentSince: vi.fn(),
@@ -153,7 +153,7 @@ describe('OutboxProcessor', () => {
     const proactive = buildRow({ id: 4, is_proactive: 1 });
     const repository = {
       findPending: vi.fn().mockReturnValue([proactive]),
-      markSending: vi.fn(),
+      claimForSending: vi.fn().mockReturnValue(true),
       markDelivered: vi.fn(),
       countProactiveSentSince: vi.fn().mockReturnValue(0),
     } as unknown as OutboxRepository;
@@ -182,7 +182,7 @@ describe('OutboxProcessor', () => {
     const proactive = buildRow({ id: 5, is_proactive: 1 });
     const repository = {
       findPending: vi.fn().mockReturnValue([proactive]),
-      markSending: vi.fn(),
+      claimForSending: vi.fn().mockReturnValue(true),
       countProactiveSentSince: vi.fn().mockReturnValue(6),
     } as unknown as OutboxRepository;
 
@@ -201,6 +201,107 @@ describe('OutboxProcessor', () => {
     await processor.processPending();
 
     expect(sender.sendText).not.toHaveBeenCalled();
-    expect(repository.markSending).not.toHaveBeenCalled();
+    expect(repository.claimForSending).not.toHaveBeenCalled();
+  });
+
+  it('conta o teto diário a partir da meia-noite de America/Sao_Paulo, não de uma janela rolante de 24h', async () => {
+    const proactive = buildRow({ id: 7, is_proactive: 1 });
+    const repository = {
+      findPending: vi.fn().mockReturnValue([proactive]),
+      claimForSending: vi.fn().mockReturnValue(true),
+      markDelivered: vi.fn(),
+      countProactiveSentSince: vi.fn().mockReturnValue(0),
+    } as unknown as OutboxRepository;
+
+    const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn().mockResolvedValue(undefined) };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+
+    // 00:30 em São Paulo (UTC-03:00) em 26/08 == 03:30 UTC do mesmo dia.
+    const processor = new OutboxProcessor({
+      repository,
+      sender,
+      alerter,
+      logger: silentLogger(),
+      dailyProactiveCap: 6,
+      now: () => new Date('2026-08-26T03:30:00.000Z'),
+      sleep: noSleep(),
+      random: () => 0.5,
+    });
+
+    await processor.processPending();
+
+    // meia-noite de 26/08 em São Paulo == 2026-08-26T03:00:00.000Z — se a
+    // janela ainda fosse rolante de 24h, o "since" cairia no dia anterior.
+    expect(repository.countProactiveSentSince).toHaveBeenCalledWith('2026-08-26T03:00:00.000Z');
+  });
+
+  it('duas execuções concorrentes de processPending enviam a mensagem só 1 vez (guard de reentrância)', async () => {
+    const row = buildRow({ id: 8 });
+    // simula o sleep cedendo o event loop no meio do processamento — é
+    // exatamente a janela em que um segundo tick concorrente entraria.
+    let releaseFirstRun: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+
+    const repository = {
+      findPending: vi.fn().mockReturnValue([row]),
+      claimForSending: vi.fn().mockReturnValue(true),
+      markDelivered: vi.fn(),
+      countProactiveSentSince: vi.fn(),
+    } as unknown as OutboxRepository;
+
+    const sender: MessageSender = {
+      sendText: vi.fn().mockImplementation(async () => {
+        await blocked;
+      }),
+      sendPresence: vi.fn(),
+    };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+
+    const processor = new OutboxProcessor({
+      repository,
+      sender,
+      alerter,
+      logger: silentLogger(),
+      dailyProactiveCap: 6,
+      sleep: noSleep(),
+    });
+
+    const firstRun = processor.processPending();
+    const secondRun = processor.processPending();
+
+    releaseFirstRun!();
+    await Promise.all([firstRun, secondRun]);
+
+    expect(sender.sendText).toHaveBeenCalledTimes(1);
+    expect(repository.findPending).toHaveBeenCalledTimes(1);
+  });
+
+  it('não reenvia mensagem cujo claim atômico já foi perdido para outra execução', async () => {
+    const row = buildRow({ id: 9 });
+    const repository = {
+      findPending: vi.fn().mockReturnValue([row]),
+      claimForSending: vi.fn().mockReturnValue(false),
+      markDelivered: vi.fn(),
+      countProactiveSentSince: vi.fn(),
+    } as unknown as OutboxRepository;
+
+    const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+
+    const processor = new OutboxProcessor({
+      repository,
+      sender,
+      alerter,
+      logger: silentLogger(),
+      dailyProactiveCap: 6,
+      sleep: noSleep(),
+    });
+
+    await processor.processPending();
+
+    expect(sender.sendText).not.toHaveBeenCalled();
+    expect(repository.markDelivered).not.toHaveBeenCalled();
   });
 });

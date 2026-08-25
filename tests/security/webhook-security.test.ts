@@ -75,6 +75,26 @@ describe('suite de segurança/isolamento do webhook (TESTING.md §3)', () => {
     expect(response.statusCode).toBe(401);
   });
 
+  it('S1: aceita o segredo via query string (fallback do provisionamento real na Evolution 2.3.7)', async () => {
+    const response = await app.fastify.inject({
+      method: 'POST',
+      url: `/webhook/evolution?secret=${WEBHOOK_SECRET}`,
+      payload: textMessagePayload({}),
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  it('S1: segredo errado na query string é rejeitado', async () => {
+    const response = await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution?secret=segredo-errado-000000000000000',
+      payload: textMessagePayload({}),
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
   it('S2: webhook de instância Evolution diferente é ignorado, nenhum efeito no task-store', async () => {
     const response = await app.fastify.inject({
       method: 'POST',
@@ -145,6 +165,35 @@ describe('suite de segurança/isolamento do webhook (TESTING.md §3)', () => {
     expect(outboxCount(app)).toBe(1);
   });
 
+  it('S8b: mensagem sem key.id (dedup impossível) é rejeitada, nunca processada', async () => {
+    const { calls } = stubFetch(() => jsonResponse(200));
+    // key.id ausente: schema permite (campo opcional), mas o dedup não teria
+    // como funcionar — precisa ser recusado antes do dispatch.
+    const payload = {
+      event: 'messages.upsert',
+      instance: INSTANCE,
+      data: {
+        key: { remoteJid: OWNER_JID, fromMe: false },
+        message: { conversation: 'ping' },
+      },
+    };
+
+    const response = await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({ ignored: true });
+    expect(messagesCount(app)).toBe(0);
+    expect(outboxCount(app)).toBe(0);
+
+    await app.outboxProcessor.processPending();
+    expect(calls.some((c) => c.url.includes('/message/sendText/'))).toBe(false);
+  });
+
   it('S9: logger nunca expõe o segredo do webhook em texto plano', async () => {
     const logs: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
@@ -167,6 +216,42 @@ describe('suite de segurança/isolamento do webhook (TESTING.md §3)', () => {
 
     const joined = logs.join('');
     expect(joined).not.toContain('valor-que-nao-pode-vazar-em-log');
+  });
+
+  it('S9: log de acesso do Fastify não vaza o segredo quando ele chega via query string', async () => {
+    // NODE_ENV=test silencia o pino (buildTestApp) — esse cenário só se
+    // manifesta com o nível de log real de produção, então sobe uma
+    // instância dedicada em vez de reusar o `app` padrão da suite.
+    const { buildApp } = await import('../../src/app.js');
+    const { buildTestEnv } = await import('../factories/test-app.js');
+    const prodLikeApp = buildApp(buildTestEnv({ NODE_ENV: 'production' }), {
+      outboxSleep: async () => undefined,
+      provisionWebhook: false,
+    });
+
+    const logs: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- captura raw de stdout só para asserção de log neste teste
+    (process.stdout.write as any) = (chunk: string) => {
+      logs.push(String(chunk));
+      return true;
+    };
+
+    try {
+      await prodLikeApp.fastify.inject({
+        method: 'POST',
+        url: `/webhook/evolution?secret=${WEBHOOK_SECRET}`,
+        payload: textMessagePayload({}),
+      });
+    } finally {
+      process.stdout.write = originalWrite;
+      await prodLikeApp.fastify.close();
+      prodLikeApp.db.close();
+    }
+
+    const joined = logs.join('');
+    expect(joined).not.toContain(WEBHOOK_SECRET);
+    expect(joined).toContain('/webhook/evolution');
   });
 
   it('S10: payload de webhook malformado (tipo errado) é rejeitado com erro controlado', async () => {

@@ -1,0 +1,10 @@
+# Override só do perfil local (SECURITY.md §5): publica a porta da Evolution
+# em 127.0.0.1 para parear o QR pelo painel. Nunca combinar este arquivo em
+# produção — lá a Evolution fica só na rede interna, sem porta no host.
+#
+# Uso: docker compose -f infra/docker-compose.yml -f infra/docker-compose.local.yml --profile local up
+
+services:
+  evolution:
+    ports:
+      - '127.0.0.1:8080:8080'
