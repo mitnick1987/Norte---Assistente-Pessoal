@@ -65,7 +65,7 @@ Decisões-chave:
 │   │   ├── scheduler/          jobs duráveis: poll 30s, catch-up no boot, recorrência, retries
 │   │   ├── outbox/             envio de mensagens: fila, confirmação pós-2xx, delay aleatório, sendPresence, teto diário de proativas
 │   │   ├── llm/                cliente Claude: triagem (Haiku), brain (Sonnet), Batch API; prompt caching byte-estável; monitor de custo
-│   │   ├── channel/            interface Channel + registry: whatsapp-evolution (ativo), telegram (dormente, M3)
+│   │   ├── channel/            interface Channel + registry: whatsapp-evolution (ativo), api-compat OpenAI/Anthropic (M2, ADR-016), telegram (dormente, M3)
 │   │   ├── mcp/                servidor MCP sobre o registry de tools do kernel — Claude Code/Codex operam o Norte (M2, ADR-014)
 │   │   ├── stt/                interface de transcrição: groq (ativo), openai-whisper (fallback)
 │   │   └── settings/           chaves tipadas com defaults declarados pelos módulos
@@ -319,3 +319,4 @@ Erro que ninguém vê não existe até virar incidente — e aqui incidente sign
 | [ADR-013](adr/ADR-013-operacao-inicial-local.md) | Operação inicial local (Compose perfil `local`); VPS no hardening do M1 | Iteração rápida e sem custo na construção; catch-up no boot torna o gap tolerável; saída do M1 exige uma semana 100% no VPS |
 | [ADR-014](adr/ADR-014-integracao-mcp.md) | Servidor MCP como segundo transporte do registry de tools | Claude Code/Codex operam o Norte com 1 servidor para N agentes; validação única no backend; registry transport-agnostic desde a FEAT-001 |
 | [ADR-015](adr/ADR-015-orquestracao-cli-agentes.md) | Norte dispara Claude Code/Codex CLI headless; login delegado aos CLIs | Zero credencial de conta no Norte; guardrails bloqueantes (allowlist de diretórios, confirmação no chat, auditoria) |
+| [ADR-016](adr/ADR-016-canal-api-nativo.md) | Canal API nativo compatível OpenAI/Anthropic (estilo 9router) | Qualquer ferramenta com base URL customizado conversa com o Norte sem plugin; segunda implementação da interface Channel, mesmo funil e validação |

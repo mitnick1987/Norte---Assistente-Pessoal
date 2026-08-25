@@ -61,7 +61,7 @@ Duas teses inegociáveis orientam todo o design:
 | Tom | RSD-safe hard-coded: colega adulto, neutro, zero culpa; proibido citar histórico de falhas; suite de regressão de tom no CI |
 | Proatividade | Sempre iniciada pelo assistente; teto de ~6 mensagens proativas/dia e 10–15 lembretes ativos (parâmetros em settings) |
 | Modelos de IA | Haiku 4.5 (triagem/extração/consolidação) + Sonnet 5 (conversa/priorização) com prompt caching; sem Opus |
-| Integração com agentes | Duas direções: agentes operam o Norte via servidor MCP (ADR-014, RF-30) e o Norte delega trabalho aos CLIs Claude Code/Codex autenticados no host (ADR-015, RF-31); registry de tools nasce transport-agnostic na fundação; o Norte nunca armazena credenciais das contas dos agentes |
+| Integração com agentes | Três vias: canal API nativo compatível OpenAI/Anthropic — base URL, estilo 9router (ADR-016, RF-32); servidor MCP para agentes operarem o task-store (ADR-014, RF-30); e delegação de trabalho aos CLIs Claude Code/Codex autenticados no host (ADR-015, RF-31). Registry de tools transport-agnostic desde a fundação; o Norte nunca armazena credenciais das contas dos agentes |
 | Dados | 100% no VPS próprio + backup contínuo cifrado; deleção sempre lógica; nada de analytics de terceiros |
 | Posicionamento | Ferramenta de suporte de função executiva, complementar a tratamento; sem linguagem clínica |
 
@@ -222,6 +222,12 @@ Duas teses inegociáveis orientam todo o design:
 - Execução como job durável: timeout, allowlist de diretórios em settings, confirmação explícita no chat antes de execução que modifica arquivos, resultado devolvido no chat e auditoria completa (comando, diretório, duração, exit code).
 - `/health` e o chat reportam o estado dos CLIs (instalado? autenticado?).
 
+### RF-32 — Canal API nativo compatível com OpenAI/Anthropic (M2)
+
+- Endpoint `POST /v1/chat/completions` (formato OpenAI, com streaming SSE) e `POST /v1/messages` (formato Anthropic) autenticados por token dedicado — qualquer ferramenta com base URL customizado (Claude Code, Codex, Cursor, Cline) conversa com o Norte nativamente, sem plugin (ADR-016).
+- Mensagens entram no mesmo funil do WhatsApp (triagem → executor/brain → task-store); auditoria com origem `api`; rate limit próprio do canal.
+- O canal conversa com o Norte — não é proxy nem roteador de outros modelos.
+
 ### RF-24 — Proatividade adaptativa (M3)
 
 - Tabela `patterns` acumula horários de resposta, ignorados e pedidos de silêncio; briefing desliza para o horário real de despertar e cobranças migram para janelas de resposta.
@@ -305,7 +311,7 @@ Duas teses inegociáveis orientam todo o design:
 | Fase | Escopo | Estimativa |
 |---|---|---|
 | M1 — Núcleo confiável (MVP) | RF-01..RF-15: infra (Docker Compose local com perfil de produção pronto — Evolution 2.3.7; Caddy/Litestream/Healthchecks entram na migração para o VPS, ADR-013), captura texto+áudio, task-store, scheduler durável, cadeias de lembrete, briefing e revisão com fallback, executor determinístico, fechamento de loop, "qual a próxima?", modo retorno sem culpa, higiene da lista, Google Calendar, watchdog/alertas, tom RSD-safe com testes, monitor de custo. Valor na 1ª semana: capturar por áudio, briefing com agenda real, nunca mais perder compromisso. | 5–6 semanas (uma pessoa + IA): sem. 1 infra local + Evolution + adapter; sem. 2–3 task-store + scheduler + captura + cadeias; sem. 4–5 rituais + loop + Calendar + modo retorno; sem. 6 hardening, testes de falha injetada e de tom, migração para o VPS e restore de backup |
-| M2 — Destravar e conhecer | RF-16..RF-23 e RF-30: foto/print e encaminhamento viram compromisso (vision), micropassos e "só 5 minutos", if-then contextualizado, memória de longo prazo (facts + Batch API), sessões de foco, planejamento por energia, Gmail no briefing, planejamento por capacidade real, servidor MCP para Claude Code/Codex. | 3–4 semanas, começando após ≥ 2 semanas de uso real do M1 (o uso calibra prioridades e prompts) |
+| M2 — Destravar e conhecer | RF-16..RF-23, RF-30 e RF-32: foto/print e encaminhamento viram compromisso (vision), micropassos e "só 5 minutos", if-then contextualizado, memória de longo prazo (facts + Batch API), sessões de foco, planejamento por energia, Gmail no briefing, planejamento por capacidade real, servidor MCP e canal API nativo para Claude Code/Codex. | 3–4 semanas, começando após ≥ 2 semanas de uso real do M1 (o uso calibra prioridades e prompts) |
 | M3 — Adaptar e centralizar | RF-24..RF-29 e RF-31: proatividade adaptativa por patterns, boletos por foto, integração com ferramenta de trabalho, retrospectiva mensal, canal de contingência Telegram testado, checklist de preparação nos alertas de saída, delegação de trabalho aos CLIs Claude Code/Codex. | 4–6 semanas, intercaladas com operação — itens independentes, entregáveis um a um conforme o uso pedir |
 | Operação contínua | Ajuste de prompts por feedback real, revisão do formato do briefing quando a taxa de resposta cair (anti-habituação), upgrade testado da Evolution, teste trimestral do adapter Telegram, restore de backup a cada milestone. | ~2–4 h/semana em regime permanente |
 
