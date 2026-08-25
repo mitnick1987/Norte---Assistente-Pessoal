@@ -24,8 +24,13 @@ export default tseslint.config(
       },
       'boundaries/elements': [
         { type: 'core', pattern: 'src/core/*' },
-        { type: 'module', pattern: 'src/modules/*', capture: ['moduleName'] },
-        { type: 'module-public', pattern: 'src/modules/*/public', capture: ['moduleName'] },
+        // module-public precisa vir antes de module: o matcher do plugin
+        // usa o primeiro pattern que casar, e "src/modules/*/public" é um
+        // caso mais específico de "src/modules/*" — na ordem trocada, todo
+        // arquivo em modules/*/public/ seria classificado como "module" e a
+        // fronteira pública deixaria de existir silenciosamente.
+        { type: 'module-public', pattern: 'src/modules/*/public/**/*', capture: ['moduleName'] },
+        { type: 'module', pattern: 'src/modules/*/**/*', capture: ['moduleName'] },
         { type: 'infra-ops', pattern: 'src/infra-ops/*' },
         { type: 'app', pattern: 'src/app.ts' },
       ],

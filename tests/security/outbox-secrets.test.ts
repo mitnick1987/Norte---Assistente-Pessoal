@@ -62,6 +62,7 @@ describe('S9: segredos nunca aparecem em log no caminho de envio (outbox)', () =
       headers: { 'x-webhook-secret': WEBHOOK_SECRET },
       payload: pingPayload('wa-secret-1'),
     });
+    await app.waitForPendingProcessing();
 
     const { logs, restore } = captureStdout();
     try {
@@ -83,6 +84,7 @@ describe('S9: segredos nunca aparecem em log no caminho de envio (outbox)', () =
       headers: { 'x-webhook-secret': WEBHOOK_SECRET },
       payload: pingPayload('wa-secret-2'),
     });
+    await app.waitForPendingProcessing();
 
     const { logs, restore } = captureStdout();
     try {
@@ -110,6 +112,7 @@ describe('S9: segredos nunca aparecem em log no caminho de envio (outbox)', () =
       headers: { 'x-webhook-secret': WEBHOOK_SECRET },
       payload: pingPayload('wa-secret-3'),
     });
+    await app.waitForPendingProcessing();
 
     await app.outboxProcessor.processPending();
 

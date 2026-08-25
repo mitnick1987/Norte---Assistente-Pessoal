@@ -9,6 +9,7 @@ function validEnv(): NodeJS.ProcessEnv {
     EVOLUTION_INSTANCE: 'norte',
     EVOLUTION_WEBHOOK_SECRET: 'a'.repeat(32),
     OWNER_WHATSAPP_JID: '5511999999999@s.whatsapp.net',
+    ANTHROPIC_API_KEY: 'test-anthropic-key',
   };
 }
 
@@ -32,6 +33,11 @@ describe('loadEnv', () => {
 
   it('rejeita quando falta uma variável obrigatória', () => {
     const { OWNER_WHATSAPP_JID: _omit, ...rest } = validEnv();
+    expect(() => loadEnv(rest)).toThrow(InvalidEnvError);
+  });
+
+  it('rejeita quando falta ANTHROPIC_API_KEY (SECURITY.md §4)', () => {
+    const { ANTHROPIC_API_KEY: _omit, ...rest } = validEnv();
     expect(() => loadEnv(rest)).toThrow(InvalidEnvError);
   });
 

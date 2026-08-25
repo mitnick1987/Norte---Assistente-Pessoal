@@ -19,16 +19,16 @@ import {
   ConnectionWatchdog,
   registerEvolutionWebhookRoute,
   provisionEvolutionWebhook,
+  recoverPendingMessages,
 } from './core/channel/whatsapp-evolution/index.js';
 import { registerHealthRoute } from './core/health/index.js';
 import { EmailAlerter } from './infra-ops/index.js';
-import { echoModule } from './modules/echo/index.js';
-
-// Lista explícita de módulos ativos (ARCHITECTURE.md §2) — M1 liga aqui os
-// módulos de domínio conforme forem chegando; por ora só a prova de conceito.
-const ACTIVE_MODULES = [echoModule];
+import { AnthropicApiKeyProvider } from './core/llm/index.js';
+import { buildTasksModule } from './modules/tasks/public/index.js';
+import { buildCaptureModule, PENDING_RECOVERY_THRESHOLD_MS_SETTING } from './modules/capture/manifest.js';
 
 const OUTBOX_INTERVAL_MS = 5_000;
+const PENDING_PROCESSING_POLL_MS = 20;
 
 /**
  * npm_package_version só existe quando o processo nasce de `npm run` — o
@@ -58,6 +58,13 @@ export interface App {
   readonly db: Database;
   start: () => Promise<void>;
   stop: () => Promise<void>;
+  /**
+   * Só para teste (ADR-018): o processamento da mensagem roda em background,
+   * disparado sem `await` pelo webhook — o `inject()` retorna antes dele
+   * terminar. Faz polling no status em `messages` até não sobrar nenhuma
+   * `pending`, nunca usado no boot real (TESTING.md §7).
+   */
+  waitForPendingProcessing: (timeoutMs?: number) => Promise<void>;
 }
 
 export interface BuildAppOverrides {
@@ -72,10 +79,29 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   const logger = createLogger(env.NODE_ENV);
   const db = openDatabase(env.DB_PATH);
 
+  // tasks nasce primeiro: capture depende do ItemService dela (contrato
+  // público, ARCHITECTURE.md §2) para gravar itens sem SQL direto.
+  const { manifest: tasksManifest, service: itemService } = buildTasksModule(db);
+
+  const jobRepository = new JobRepository(db);
+  const outboxRepository = new OutboxRepository(db);
+  const messageRepository = new MessageRepository(db);
+
+  const llmProvider = new AnthropicApiKeyProvider({ apiKey: env.ANTHROPIC_API_KEY });
+
+  const { manifest: captureManifest, dispatch: dispatchCapture } = buildCaptureModule({
+    llmProvider,
+    itemService,
+    jobRepository,
+    outboxRepository,
+    messageRepository,
+    ownerJid: env.OWNER_WHATSAPP_JID,
+    logger,
+  });
+
   const registry = new KernelRegistry();
-  for (const module of ACTIVE_MODULES) {
-    registry.register(module);
-  }
+  registry.register(tasksManifest);
+  registry.register(captureManifest);
 
   runMigrations(db, [...coreMigrations, ...registry.getMigrations()]);
 
@@ -85,15 +111,12 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   const settings = new SettingsStore(db);
   settings.seedDefaults(registry.getSettingsDefaults());
 
-  const jobRepository = new JobRepository(db);
   const scheduler = new Scheduler({
     repository: jobRepository,
     jobHandlers: registry.getJobHandlers(),
     logger,
   });
 
-  const outboxRepository = new OutboxRepository(db);
-  const messageRepository = new MessageRepository(db);
   const connectionWatchdog = new ConnectionWatchdog();
 
   const evolutionClient = new EvolutionClient({
@@ -130,6 +153,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     commands: registry.getCommands(),
     connectionWatchdog,
     logger,
+    onUnmatchedText: dispatchCapture,
   });
 
   registerHealthRoute(fastify, {
@@ -147,6 +171,26 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     scheduler,
     db,
     async start() {
+      // Mesmo espírito do catch-up de jobs (ADR-004): mensagem `pending`
+      // sobrevivente a um crash no meio de triagem→captura→confirmação é
+      // reprocessada aqui, antes do processo voltar a aceitar webhooks novos
+      // (ADR-018). Reusa o mesmo caminho de processamento do fluxo normal —
+      // nenhuma lógica de dispatch duplicada.
+      const thresholdMs =
+        settings.get<number>(PENDING_RECOVERY_THRESHOLD_MS_SETTING) ??
+        registry.getSettingsDefaults()[PENDING_RECOVERY_THRESHOLD_MS_SETTING];
+      await recoverPendingMessages(
+        {
+          messageRepository,
+          ownerJid: env.OWNER_WHATSAPP_JID,
+          commands: registry.getCommands(),
+          outboxRepository,
+          onUnmatchedText: dispatchCapture,
+          logger,
+        },
+        Number(thresholdMs),
+      );
+
       await scheduler.runCatchUp();
       scheduler.start();
 
@@ -182,6 +226,15 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
       if (outboxTimer) clearInterval(outboxTimer);
       await fastify.close();
       db.close();
+    },
+    async waitForPendingProcessing(timeoutMs = 5_000) {
+      const deadline = Date.now() + timeoutMs;
+      while (messageRepository.findPendingInbound().length > 0) {
+        if (Date.now() >= deadline) {
+          throw new Error('waitForPendingProcessing: timeout esperando processamento em background terminar');
+        }
+        await new Promise((resolve) => setTimeout(resolve, PENDING_PROCESSING_POLL_MS));
+      }
     },
   };
 }

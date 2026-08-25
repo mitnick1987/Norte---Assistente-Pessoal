@@ -33,6 +33,10 @@ describe('falha injetada: envio sem 2xx esgota o retry exponencial (TESTING.md �
         data: { key: { remoteJid: OWNER_JID, id: 'wa-fail-1', fromMe: false }, message: { conversation: 'ping' } },
       },
     });
+    // ADR-018: o processamento (triagem->captura/comando->confirmação) roda
+    // em background — o inject() só garante o ACK, não que a mensagem de
+    // saída já esteja enfileirada no outbox.
+    await app.waitForPendingProcessing();
 
     // esgota attempts manualmente até o teto, forçando o retry a ficar imediatamente elegível.
     for (let i = 0; i < MAX_ATTEMPTS; i++) {

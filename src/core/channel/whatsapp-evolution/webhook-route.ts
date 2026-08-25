@@ -10,6 +10,16 @@ import { evolutionWebhookSchema } from './webhook-schema.js';
 import { isEchoOfOwnMessage, normalizeIncomingMessage } from './normalize.js';
 import { isFromOwner } from './owner-filter.js';
 
+/**
+ * Ponto de extensão para módulos de processamento (capture) que não têm
+ * lugar no `ModuleManifest` — o core não conhece módulos (ARCHITECTURE.md
+ * §2), então o webhook chama isso sem importar `capture` diretamente.
+ * `messageId` viaja junto (ADR-018): é o vínculo que a captura grava em
+ * `items.source_message_id` para a varredura de recuperação detectar
+ * reprocessamento e não duplicar a gravação.
+ */
+export type UnmatchedTextHandler = (text: string, jid: string, messageId: number) => Promise<void>;
+
 export interface WebhookRouteDeps {
   readonly webhookSecret: string;
   readonly instance: string;
@@ -19,6 +29,15 @@ export interface WebhookRouteDeps {
   readonly commands: readonly CommandMatcher[];
   readonly connectionWatchdog: ConnectionWatchdog;
   readonly logger: Logger;
+  /** Ausente = comportamento da FEAT-001 (silêncio quando nenhum comando bate). */
+  readonly onUnmatchedText?: UnmatchedTextHandler;
+}
+
+export interface ProcessInboundDeps {
+  readonly ownerJid: string;
+  readonly commands: readonly CommandMatcher[];
+  readonly outboxRepository: OutboxRepository;
+  readonly onUnmatchedText?: UnmatchedTextHandler;
 }
 
 const headersSchema = z.object({
@@ -62,10 +81,39 @@ function extractProvidedSecret(request: FastifyRequest): string | undefined {
 }
 
 /**
+ * Processamento de fato (triagem→captura→confirmação ou comando
+ * determinístico) — ADR-018: roda em background, nunca segura o 2xx do
+ * webhook. Também é o caminho que a varredura de recuperação no boot chama
+ * de novo para mensagens `pending` (mesma função, sem duplicar lógica).
+ *
+ * Decisão de escopo: comandos determinísticos ("feito", "adia" etc.) não
+ * fazem I/O de LLM e seriam baratos o bastante para rodar antes do 2xx, mas
+ * uniformizar tudo num único caminho rastreável por `processing_status`
+ * (pending/processed/failed) é mais simples e evita duas máquinas de estado
+ * paralelas — o overhead de um comando síncrono virar background é
+ * desprezível perto do ganho de ter um único lugar que marca conclusão.
+ */
+export async function processInboundText(text: string, jid: string, messageId: number, deps: ProcessInboundDeps): Promise<void> {
+  const matcher = deps.commands.find((command) => command.match({ text, ownerJid: deps.ownerJid }));
+
+  if (!matcher) {
+    await deps.onUnmatchedText?.(text, jid, messageId);
+    return;
+  }
+
+  const result = await matcher.handle({ text, ownerJid: deps.ownerJid });
+  deps.outboxRepository.enqueue({ jid, body: result.replyText, isProactive: false });
+}
+
+/**
  * Única entrada HTTP externa do sistema (ARCHITECTURE.md §5). Ordem das
  * checagens importa e é a mesma exigida por SECURITY.md §2: segredo →
  * validação de contrato → instância → JID do dono → dedup — cada etapa
  * fail-closed, nenhuma pula para a próxima em caso de dúvida.
+ *
+ * ADR-018: depois do dedup, a mensagem já está persistida como `pending` —
+ * o 2xx sai imediatamente e o processamento roda numa promise não aguardada.
+ * A Evolution não pode ficar de conexão aberta esperando a triagem (até 15s).
  */
 export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: WebhookRouteDeps): void {
   app.post('/webhook/evolution', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -113,32 +161,38 @@ export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: Webhoo
       return reply.code(200).send({ ignored: true });
     }
 
-    const isNew = deps.messageRepository.tryRecordInbound({
+    const recorded = deps.messageRepository.tryRecordInbound({
       jid: incoming.jid,
       waMessageId: incoming.waMessageId,
       body: incoming.text,
     });
 
-    if (!isNew) {
+    if (!recorded.isNew) {
       deps.logger.info({ waMessageId: incoming.waMessageId }, 'webhook ignorado: mensagem duplicada (dedup)');
       return reply.code(200).send({ deduped: true });
     }
 
-    await dispatchToCommands(incoming, deps);
+    if (incoming.kind === 'text' && incoming.text) {
+      const messageId = recorded.messageId;
+      const text = incoming.text;
+      const jid = incoming.jid;
+
+      // Disparo não aguardado de propósito (ADR-018): o 2xx não pode esperar
+      // a triagem (LLM, até 15s). Erro aqui é sempre definitivo — qualquer
+      // exceção que escape do processamento marca a mensagem como `failed`
+      // e loga, nunca falha em silêncio.
+      void processInboundText(text, jid, messageId, deps)
+        .then(() => deps.messageRepository.markProcessed(messageId))
+        .catch((err: unknown) => {
+          deps.messageRepository.markFailed(messageId);
+          deps.logger.error({ err, messageId, waMessageId: incoming.waMessageId }, 'falha ao processar mensagem recebida');
+        });
+    } else {
+      // Sem texto (áudio/imagem/outro, fora de escopo desta feature) não há
+      // processamento — a mensagem fica registrada mas não tem próximo passo.
+      deps.messageRepository.markProcessed(recorded.messageId);
+    }
 
     return reply.code(200).send({ ok: true });
   });
-}
-
-async function dispatchToCommands(
-  incoming: ReturnType<typeof normalizeIncomingMessage>,
-  deps: WebhookRouteDeps,
-): Promise<void> {
-  if (incoming.kind !== 'text' || !incoming.text) return;
-
-  const matcher = deps.commands.find((command) => command.match({ text: incoming.text!, ownerJid: deps.ownerJid }));
-  if (!matcher) return;
-
-  const result = await matcher.handle({ text: incoming.text, ownerJid: deps.ownerJid });
-  deps.outboxRepository.enqueue({ jid: incoming.jid, body: result.replyText, isProactive: false });
 }

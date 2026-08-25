@@ -50,4 +50,38 @@ describe('migrações base do core', () => {
     db.prepare(`INSERT INTO messages (direction, jid) VALUES ('out', 'jid')`).run();
     expect(() => db.prepare(`INSERT INTO messages (direction, jid) VALUES ('out', 'jid')`).run()).not.toThrow();
   });
+
+  it('processing_status: mensagem out nasce processed por default, sem precisar declarar (ADR-018)', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    db.prepare(`INSERT INTO messages (direction, jid) VALUES ('out', 'jid')`).run();
+    const row = db.prepare('SELECT processing_status FROM messages').get() as { processing_status: string };
+    expect(row.processing_status).toBe('processed');
+  });
+
+  it('processing_status: CHECK constraint rejeita valor fora do vocabulário pending|processed|failed', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    expect(() =>
+      db
+        .prepare(`INSERT INTO messages (direction, jid, processing_status) VALUES ('in', 'jid', 'inventado')`)
+        .run(),
+    ).toThrow();
+  });
+
+  it('down da migração 005 remove a coluna processing_status sem derrubar a tabela', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    const migration = coreMigrations.find((m) => m.id === '005_core_messages_processing_status');
+    expect(migration).toBeDefined();
+
+    rollbackMigration(db, migration!);
+
+    const columns = db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[];
+    expect(columns.map((c) => c.name)).not.toContain('processing_status');
+    expect(tableNames(db)).toContain('messages');
+  });
 });
