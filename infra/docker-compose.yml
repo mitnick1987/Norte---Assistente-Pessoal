@@ -1,0 +1,108 @@
+# Dois perfis (ADR-013): "local" cobre a construção do M1 (sem custo, sem
+# Caddy/TLS, sem Litestream — backup é cópia local do SQLite); "producao"
+# soma Caddy + Litestream + dead man's switch quando migrar para o VPS no
+# hardening do M1. Migrar é trocar de perfil, não reescrever o compose.
+#
+# Evolution pinada em 2.3.7 (ADR-002) — não subir para 2.4.x sem teste em
+# paralelo e sem registrar a mudança de licença/telemetria no SECURITY.md §8.
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    profiles: ['local', 'producao']
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD:?defina EVOLUTION_POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: evolution
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+    networks: [norte_internal]
+    # sem "ports:" — só alcançável dentro da rede do compose (SECURITY.md §5).
+
+  redis:
+    image: redis:7-alpine
+    profiles: ['local', 'producao']
+    restart: unless-stopped
+    volumes:
+      - evolution_redis_data:/data
+    networks: [norte_internal]
+
+  evolution:
+    image: atendai/evolution-api:v2.3.7
+    profiles: ['local', 'producao']
+    restart: unless-stopped
+    depends_on: [postgres, redis]
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD}@postgres:5432/evolution
+      CACHE_REDIS_ENABLED: 'true'
+      CACHE_REDIS_URI: redis://redis:6379
+      WEBHOOK_GLOBAL_URL: http://brain:3000/webhook/evolution
+      WEBHOOK_GLOBAL_ENABLED: 'true'
+    networks: [norte_internal]
+    # perfil local: porta só em localhost, nunca em 0.0.0.0 (SECURITY.md §5).
+    ports:
+      - '127.0.0.1:8080:8080'
+
+  brain:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    profiles: ['local', 'producao']
+    restart: unless-stopped
+    depends_on: [evolution]
+    env_file:
+      - ../.env
+    environment:
+      DB_PATH: /data/norte.db
+    volumes:
+      - norte_db_data:/data
+    networks: [norte_internal]
+    ports:
+      - '127.0.0.1:3000:3000'
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ['producao']
+    restart: unless-stopped
+    depends_on: [brain]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [norte_internal]
+    ports:
+      - '80:80'
+      - '443:443'
+
+  litestream:
+    image: litestream/litestream:0.3
+    profiles: ['producao']
+    restart: unless-stopped
+    depends_on: [brain]
+    command: replicate
+    environment:
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:?defina LITESTREAM_ACCESS_KEY_ID no .env}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:?defina LITESTREAM_SECRET_ACCESS_KEY no .env}
+    volumes:
+      - ./litestream.yml:/etc/litestream.yml:ro
+      - norte_db_data:/data:ro
+    networks: [norte_internal]
+
+networks:
+  norte_internal:
+    driver: bridge
+
+volumes:
+  evolution_postgres_data:
+  evolution_redis_data:
+  norte_db_data:
+  caddy_data:
+  caddy_config:

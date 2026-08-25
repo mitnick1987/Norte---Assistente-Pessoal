@@ -1,0 +1,10 @@
+export { EvolutionClient } from './evolution-client.js';
+export type { EvolutionClientConfig } from './evolution-client.js';
+export { ConnectionWatchdog } from './connection-watchdog.js';
+export type { ConnectionState } from './connection-watchdog.js';
+export { registerEvolutionWebhookRoute } from './webhook-route.js';
+export type { WebhookRouteDeps } from './webhook-route.js';
+export { evolutionWebhookSchema } from './webhook-schema.js';
+export type { EvolutionWebhookPayload, MessagesUpsertEvent, ConnectionUpdateEvent } from './webhook-schema.js';
+export { normalizeIncomingMessage, isEchoOfOwnMessage } from './normalize.js';
+export { isFromOwner, normalizeJid } from './owner-filter.js';

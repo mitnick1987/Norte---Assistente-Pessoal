@@ -72,8 +72,14 @@ Não atende um RF de produto diretamente — é a infraestrutura que torna RF-01
 
 ## Entrega (preencher no fim, antes do merge)
 
-- **O que foi feito:**
-- **PRs:**
-- **Migrações:**
+- **O que foi feito:** backend completo do escopo — scaffold (Node 22, TS strict, Fastify, better-sqlite3 WAL, zod, pino, ESLint com `eslint-plugin-boundaries`, Vitest); `core/kernel` (`ModuleManifest` com `events` incluído, `KernelRegistry` com composição determinística e `wireEvents` para o bus); `core/db` (WAL + runner de migrações com `down` testado); `core/scheduler` (poll 30s, catch-up no boot, recorrência TZ-aware `America/Sao_Paulo`); `core/outbox` (confirmação pós-2xx, retry exponencial com backoff persistido em `retry_after`, delay anti-banimento 10–45s + `sendPresence`, teto diário de proativas, alerta por e-mail ao esgotar retries); `core/channel` + adapter `whatsapp-evolution` (webhook validado, filtro de JID, dedup, `sendText`/`sendPresence`/`getBase64FromMediaMessage`, watchdog de `CONNECTION_UPDATE`); `modules/echo` (ping→pong); `GET /health`; `infra/` (docker-compose com perfis local/producao, Dockerfile, Caddyfile, litestream.yml); CI sem condições de bootstrap; README com setup local real.
+- **PRs:** (preenchido pelo orquestrador ao abrir o PR)
+- **Migrações:** `001_core_messages`, `002_core_settings`, `003_core_jobs`, `004_core_outbox_messages` — todas com `up`/`down` testados em `tests/unit/core-migrations.test.ts` e `tests/unit/migrator.test.ts`.
 - **Pendências/débitos:**
+  - `EmailAlerter` só loga em `error`; não há cliente SMTP/Resend real ainda — entra com RF-13 (fora de escopo desta feature).
+  - `ConnectionWatchdog` é "básico" como a spec pede: registra o último estado, mas não dispara alerta por e-mail em sessão caída (também RF-13).
+  - `core/mcp` (servidor MCP) não existe ainda — corretamente fora de escopo (M2, ADR-014); o registry de tools já nasce transport-agnostic (`ToolDefinition` com schema zod), que é a restrição exigida nesta fundação.
+  - `eslint-plugin-boundaries` só resolve `import "./x.js"` para o `.ts` real com `import/resolver: typescript` configurado — sem isso a regra fica "cega" e não pega nenhuma violação (achado durante a validação manual do lint como gate; corrigido antes de fechar a entrega, com `eslint-import-resolver-typescript` adicionado como devDependency).
 - **Aprendizados:**
+  - `eslint-plugin-boundaries` não resolve extensão `.js`→`.ts` (padrão NodeNext/ESM) sem `settings['import/resolver']` apontando para `eslint-import-resolver-typescript`; sem isso todo import interno vira tipo "unknown" e a regra `element-types` nunca dispara — vale testar manualmente uma violação proposital sempre que este plugin for configurado do zero, porque o lint passa "verde" silenciosamente mesmo quebrado.
+  - Fastify 5 + `exactOptionalPropertyTypes: true` exige anotar explicitamente o generic de logger (`FastifyBaseLogger`) ao passar uma instância `pino.Logger` via `loggerInstance` — a inferência automática colide por variância estrutural do método `child`.

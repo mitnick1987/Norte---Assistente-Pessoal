@@ -1,0 +1,12 @@
+# Replicação contínua do SQLite para Backblaze B2 (ARCHITECTURE.md §1).
+# Perfil "producao" apenas — não exercitado no M1 (backup local por cópia
+# de arquivo enquanto a operação é local, ADR-013).
+dbs:
+  - path: /data/norte.db
+    replicas:
+      - type: s3
+        endpoint: https://s3.us-west-000.backblazeb2.com
+        bucket: ${LITESTREAM_BUCKET}
+        path: norte-db
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
