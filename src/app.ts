@@ -90,7 +90,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   // Nasce antes dos módulos: tasks publica item.dropped/item.rescheduled
   // aqui (ela é fundação, não pode importar chains — ADR-011), chains
   // assina para cancelar/regenerar a cadeia (FEAT-004).
-  const eventBus = new EventBus<Record<string, unknown>>();
+  const eventBus = new EventBus<Record<string, unknown>>({ logger });
 
   // tasks nasce primeiro: capture/chains dependem do ItemService/EventService
   // dela (contrato público, ARCHITECTURE.md §2) para gravar itens/eventos

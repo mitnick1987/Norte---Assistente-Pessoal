@@ -125,4 +125,56 @@ describe('migrações base do core', () => {
     );
     expect(tableNames(db)).toContain('messages');
   });
+
+  it('migração 007 aceita status cancelado em jobs sem derrubar o CHECK existente', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    db.prepare(`INSERT INTO jobs (type, next_run_at, status) VALUES ('reminder', datetime('now'), 'cancelado')`).run();
+    const row = db.prepare(`SELECT status FROM jobs WHERE status = 'cancelado'`).get() as { status: string };
+    expect(row.status).toBe('cancelado');
+
+    expect(() =>
+      db.prepare(`INSERT INTO jobs (type, next_run_at, status) VALUES ('reminder', datetime('now'), 'inventado')`).run(),
+    ).toThrow();
+  });
+
+  it('migração 007 preserva dados e o índice jobs_due_lookup ao recriar a tabela', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    db.prepare(`INSERT INTO jobs (type, next_run_at, status) VALUES ('reminder', '2026-08-28T11:00:00.000Z', 'pending')`).run();
+
+    const row = db.prepare(`SELECT type, next_run_at, status FROM jobs`).get() as {
+      type: string;
+      next_run_at: string;
+      status: string;
+    };
+    expect(row).toEqual({ type: 'reminder', next_run_at: '2026-08-28T11:00:00.000Z', status: 'pending' });
+
+    const indexes = db.prepare(`PRAGMA index_list(jobs)`).all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain('jobs_due_lookup');
+  });
+
+  it('down da migração 007 remove o status cancelado, rebaixando jobs cancelados para failed (melhor mapeamento reversível)', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    const id = db
+      .prepare(`INSERT INTO jobs (type, next_run_at, status) VALUES ('reminder', datetime('now'), 'cancelado')`)
+      .run().lastInsertRowid;
+
+    const migration = coreMigrations.find((m) => m.id === '007_core_jobs_cancelado_status');
+    expect(migration).toBeDefined();
+
+    rollbackMigration(db, migration!);
+
+    const row = db.prepare('SELECT status FROM jobs WHERE id = ?').get(id) as { status: string };
+    expect(row.status).toBe('failed');
+
+    expect(() =>
+      db.prepare(`INSERT INTO jobs (type, next_run_at, status) VALUES ('reminder', datetime('now'), 'cancelado')`).run(),
+    ).toThrow();
+    expect(tableNames(db)).toContain('jobs');
+  });
 });

@@ -68,6 +68,13 @@ export class JobRepository {
       .run(id);
   }
 
+  /** Cancelamento de rotina (drop/reagendamento) — nunca `failed`: a métrica de entrega (ARCHITECTURE.md §6) conta falha real, não intenção do dono mudando. */
+  markCancelled(id: number): void {
+    this.db
+      .prepare(`UPDATE jobs SET status = 'cancelado', updated_at = datetime('now') WHERE id = ?`)
+      .run(id);
+  }
+
   incrementAttempts(id: number): void {
     this.db
       .prepare(`UPDATE jobs SET attempts = attempts + 1, updated_at = datetime('now') WHERE id = ?`)

@@ -93,9 +93,25 @@ describe('ChainService (orquestração de jobs da cadeia, FEAT-004)', () => {
 
     expect(jobRepository.findPending()).toHaveLength(0);
     const jobStatuses = db.prepare('SELECT status FROM jobs').all() as { status: string }[];
-    expect(jobStatuses.every((j) => j.status === 'failed')).toBe(true);
+    expect(jobStatuses.every((j) => j.status === 'cancelado')).toBe(true);
     const eventRow = db.prepare('SELECT status FROM events WHERE id = ?').get(event.id) as { status: string };
     expect(eventRow.status).toBe('cancelado');
+  });
+
+  it('item.dropped marca os jobs como cancelado, nunca failed (drop de rotina não é incidente de entrega, ARCHITECTURE.md §6)', async () => {
+    const { db, eventService, chainService } = buildContext();
+    const event = eventService.create({
+      itemId: 1,
+      title: 'dentista',
+      startAt: new Date('2026-08-28T17:00:00.000Z'),
+      deslocamentoMin: 30,
+    });
+    chainService.scheduleForEvent(event);
+
+    await chainService.onItemDropped({ itemId: 1 });
+
+    const failedCount = db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE status = 'failed'`).get() as { c: number };
+    expect(failedCount.c).toBe(0);
   });
 
   it('item.dropped preserva jobs já confirmed/sent da cadeia (só cancela os pending)', async () => {
@@ -118,8 +134,10 @@ describe('ChainService (orquestração de jobs da cadeia, FEAT-004)', () => {
     expect(confirmedJob.status).toBe('confirmed');
     const remainingPending = jobRepository.findPending();
     expect(remainingPending).toHaveLength(0);
-    const failedCount = db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE status = 'failed'`).get() as { c: number };
-    expect(failedCount.c).toBe(2);
+    const cancelledCount = db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE status = 'cancelado'`).get() as {
+      c: number;
+    };
+    expect(cancelledCount.c).toBe(2);
   });
 
   it('item.dropped chamado duas vezes para o mesmo item é idempotente (entrega duplicada no bus não lança nem cancela nada duas vezes)', async () => {
@@ -137,8 +155,10 @@ describe('ChainService (orquestração de jobs da cadeia, FEAT-004)', () => {
 
     const eventRow = db.prepare('SELECT status FROM events WHERE id = ?').get(event.id) as { status: string };
     expect(eventRow.status).toBe('cancelado');
-    const failedCount = db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE status = 'failed'`).get() as { c: number };
-    expect(failedCount.c).toBe(3);
+    const cancelledCount = db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE status = 'cancelado'`).get() as {
+      c: number;
+    };
+    expect(cancelledCount.c).toBe(3);
   });
 
   it('item.dropped é no-op quando o item nunca teve evento (compromisso sem hora resolvida, ou outro tipo)', async () => {
@@ -175,7 +195,7 @@ describe('ChainService (orquestração de jobs da cadeia, FEAT-004)', () => {
     expect(payloads.every((p) => p['eventId'] === newEvent!.id)).toBe(true);
   });
 
-  it('item.rescheduled marca os jobs antigos como failed sem apagá-los nem mexer no next_run_at (rastro de auditoria, Decisões tomadas da FEAT-004)', async () => {
+  it('item.rescheduled marca os jobs antigos como cancelado sem apagá-los nem mexer no next_run_at (rastro de auditoria, Decisões tomadas da FEAT-004)', async () => {
     const { db, jobRepository, eventService, chainService } = buildContext();
     const event = eventService.create({
       itemId: 1,
@@ -193,11 +213,11 @@ describe('ChainService (orquestração de jobs da cadeia, FEAT-004)', () => {
       .prepare(`SELECT id, status, next_run_at FROM jobs WHERE id IN (${oldJobs.map((j) => j.id).join(',')})`)
       .all() as { id: number; status: string; next_run_at: string }[];
     expect(oldJobRows).toHaveLength(3);
-    expect(oldJobRows.every((j) => j.status === 'failed')).toBe(true);
+    expect(oldJobRows.every((j) => j.status === 'cancelado')).toBe(true);
     expect(oldJobRows.every((j) => j.next_run_at === oldFireAtById.get(j.id))).toBe(true);
 
     const totalJobCount = db.prepare('SELECT COUNT(*) as c FROM jobs').get() as { c: number };
-    expect(totalJobCount.c).toBe(6); // 3 antigos (failed) + 3 novos (pending) — nunca editados in-place
+    expect(totalJobCount.c).toBe(6); // 3 antigos (cancelado) + 3 novos (pending) — nunca editados in-place
   });
 
   it('item.rescheduled preserva o deslocamentoMin do evento anterior na cadeia nova', async () => {
@@ -226,6 +246,34 @@ describe('ChainService (orquestração de jobs da cadeia, FEAT-004)', () => {
 
     const newEvent = eventService.findActiveByItemId(1);
     expect(newEvent?.local).toBe('consultório');
+  });
+
+  it('item.rescheduled preserva o endAt do evento anterior na cadeia nova', async () => {
+    const { eventService, chainService } = buildContext();
+    eventService.create({
+      itemId: 1,
+      title: 'dentista',
+      startAt: new Date('2026-08-28T17:00:00.000Z'),
+      endAt: new Date('2026-08-28T18:00:00.000Z'),
+      deslocamentoMin: 30,
+    });
+    chainService.scheduleForEvent(eventService.findActiveByItemId(1)!);
+
+    await chainService.onItemRescheduled({ itemId: 1, dueAt: '2026-09-04T17:00:00.000Z' });
+
+    const newEvent = eventService.findActiveByItemId(1);
+    expect(newEvent?.endAt).toBe('2026-08-28T18:00:00.000Z');
+  });
+
+  it('item.rescheduled não quebra quando o evento anterior nunca teve endAt', async () => {
+    const { eventService, chainService } = buildContext();
+    eventService.create({ itemId: 1, title: 'dentista', startAt: new Date('2026-08-28T17:00:00.000Z'), deslocamentoMin: 30 });
+    chainService.scheduleForEvent(eventService.findActiveByItemId(1)!);
+
+    await chainService.onItemRescheduled({ itemId: 1, dueAt: '2026-09-04T17:00:00.000Z' });
+
+    const newEvent = eventService.findActiveByItemId(1);
+    expect(newEvent?.endAt).toBeNull();
   });
 
   it('item.rescheduled não quebra quando o evento anterior nunca teve local', async () => {

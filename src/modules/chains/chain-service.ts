@@ -76,12 +76,18 @@ export class ChainService {
     this.deps.eventService.markCadeiaGerada(event.id);
   }
 
-  /** Cancela todos os jobs `reminder` ainda `pending` da cadeia de um evento — jobs já `sent`/`confirmed` permanecem como histórico (ARCHITECTURE.md §6). */
+  /**
+   * Cancela todos os jobs `reminder` ainda `pending` da cadeia de um evento
+   * — jobs já `sent`/`confirmed` permanecem como histórico (ARCHITECTURE.md
+   * §6). Usa `cancelado`, não `failed`: drop/reagendamento é rotina, não
+   * incidente de entrega, e a métrica de 99,5% do PRD deriva do status dos
+   * jobs — contar isso como falha inflaria alerta por comportamento normal.
+   */
   private cancelPendingJobsForEvent(eventId: number): void {
     const pendingReminders = this.deps.jobRepository.findPendingByType(REMINDER_JOB_TYPE);
     for (const job of pendingReminders) {
       if (belongsToEvent(job, eventId)) {
-        this.deps.jobRepository.markFailed(job.id);
+        this.deps.jobRepository.markCancelled(job.id);
       }
     }
   }
@@ -111,6 +117,7 @@ export class ChainService {
       startAt: new Date(payload.dueAt),
       deslocamentoMin: previous.deslocamentoMin,
       ...(previous.local !== null ? { local: previous.local } : {}),
+      ...(previous.endAt !== null ? { endAt: new Date(previous.endAt) } : {}),
     });
 
     this.scheduleForEvent(recreated);

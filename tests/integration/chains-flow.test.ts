@@ -128,10 +128,15 @@ describe('cadeias de lembrete de compromisso (FEAT-004, PRD §6 fluxo 3)', () =>
     expect(event.status).toBe('cancelado');
 
     expect(app.db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE status = 'pending'`).get()).toMatchObject({ c: 0 });
+    const cancelledCount = app.db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE status = 'cancelado'`).get() as {
+      c: number;
+    };
+    expect(cancelledCount.c).toBe(3);
+    // drop de rotina nunca é registrado como falha de entrega (ARCHITECTURE.md §6).
     const failedCount = app.db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE status = 'failed'`).get() as {
       c: number;
     };
-    expect(failedCount.c).toBe(3);
+    expect(failedCount.c).toBe(0);
   });
 
   it('disparo de cada tipo de reminder da cadeia usa o template correto, na ordem véspera->manhã->preparo, sem nenhuma chamada ao LLM', async () => {

@@ -12,7 +12,10 @@ import type { ChainReminder, ChainSettings, ChainSourceEvent } from './chain-rem
  * FEAT-004): a cadeia nunca agenda um alerta para um instante que já
  * passou — mais simples deixar `expandChain` não produzir a etapa do que
  * ensinar o scheduler (ADR-004) a diferenciar "vencido" de "vencido demais
- * pra valer a pena".
+ * pra valer a pena". Também descarta candidato com `fireAt >= startAt`: com
+ * settings fora do comum (ex.: compromisso de manhã cedo e `manhaHour`
+ * tardio), o alerta "de manhã" pode cair depois do próprio compromisso —
+ * isso é aviso retroativo, o oposto do que RF-04 pede, então nunca dispara.
  */
 export function expandChain(event: ChainSourceEvent, settings: ChainSettings, now: Date): ChainReminder[] {
   const startParts = toZonedParts(event.startAt);
@@ -33,7 +36,10 @@ export function expandChain(event: ChainSourceEvent, settings: ChainSettings, no
   ];
 
   return candidates
-    .filter((candidate) => candidate.fireAt.getTime() > now.getTime())
+    .filter(
+      (candidate) =>
+        candidate.fireAt.getTime() > now.getTime() && candidate.fireAt.getTime() < event.startAt.getTime(),
+    )
     .map((candidate) => ({
       tipoCadeia: candidate.tipoCadeia,
       fireAt: candidate.fireAt,

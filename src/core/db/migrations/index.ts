@@ -4,6 +4,7 @@ import { coreJobs003 } from './003_core_jobs.js';
 import { coreOutboxMessages004 } from './004_core_outbox_messages.js';
 import { coreMessagesProcessingStatus005 } from './005_core_messages_processing_status.js';
 import { coreMessagesMedia006 } from './006_core_messages_media.js';
+import { coreJobsCanceladoStatus007 } from './007_core_jobs_cancelado_status.js';
 
 export const coreMigrations = [
   coreMessages001,
@@ -12,4 +13,5 @@ export const coreMigrations = [
   coreOutboxMessages004,
   coreMessagesProcessingStatus005,
   coreMessagesMedia006,
+  coreJobsCanceladoStatus007,
 ];

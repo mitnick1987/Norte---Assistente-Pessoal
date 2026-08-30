@@ -88,6 +88,17 @@ describe('expandChain (RF-04, gerador determinístico de cadeia)', () => {
     expect(vespera?.fireAt).toEqual(new Date('2026-08-27T23:00:00.000Z'));
   });
 
+  it('omite a etapa manhã quando manhaHour cairia depois do próprio compromisso (aviso retroativo, oposto do RF-04)', () => {
+    const now = new Date('2026-08-25T13:00:00.000Z');
+    // compromisso sexta 7h SP = 10h UTC; manhaHour=8 dispararia às 8h SP, 1h depois do compromisso.
+    const event = buildEvent({ startAt: new Date('2026-08-28T10:00:00.000Z') });
+
+    const reminders = expandChain(event, DEFAULT_SETTINGS, now);
+
+    expect(reminders.map((r) => r.tipoCadeia)).not.toContain('manha');
+    expect(reminders.map((r) => r.tipoCadeia)).toEqual(['vespera', 'preparo']);
+  });
+
   it('TZ America/Sao_Paulo explícito na virada de mês: véspera de compromisso no dia 1 cai no último dia do mês anterior', () => {
     const now = new Date('2026-08-25T13:00:00.000Z');
     // compromisso 2026-09-01 14h SP = 17h UTC; véspera é 2026-08-31 20h SP = 23h UTC.
