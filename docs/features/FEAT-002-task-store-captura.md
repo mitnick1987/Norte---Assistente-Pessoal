@@ -1,6 +1,6 @@
 # FEAT-002 — Task-store e captura de texto com atrito zero
 
-**Status:** rascunho · **Issue:** #6 · **Branch:** `feature/FEAT-002-task-store-captura` · **Data:** 2026-08-25
+**Status:** entregue · **Issue:** #6 · **Branch:** `feature/FEAT-002-task-store-captura` · **Data:** 2026-08-25
 
 ## Contexto e objetivo
 
@@ -103,8 +103,24 @@ Com `ANTHROPIC_API_KEY` real preenchida no `.env` local:
 
 ## Entrega (preencher no fim, antes do merge)
 
-- **O que foi feito:** resumo fiel do que entrou (difere da spec? diga onde e por quê)
-- **PRs:** #NN
-- **Migrações:** nomes dos arquivos
-- **Pendências/débitos:** TODOs criados com issues (`#NN`)
-- **Aprendizados:** o que o próximo dev precisa saber e não está óbvio no código
+- **O que foi feito:** todo o escopo da spec entrou — `modules/tasks` (task-store com migrações, serviço de transição de estado, deleção lógica, tools strict, executor determinístico em `commands.ts`), `core/llm` (provider Anthropic plugável, registro de uso em `messages`) e `modules/capture` (triagem Haiku, captura, lembrete pontual, tom RSD-safe). `modules/echo` saiu. Commit principal `a39a0d0`; review multi-agente levantou 4 achados bloqueante/importante e 5 sugestões, todos corrigidos no commit `c7ea07e`. Suite em 47 arquivos de teste / 278 testes, verde.
+
+  Quatro pontos merecem destaque por não estarem óbvios lendo só o escopo acima:
+
+  1. **ADR-018 nasceu no meio da implementação, não antes dela.** A spec original assumia processamento síncrono no handler do webhook (era o padrão herdado da FEAT-001, que não tinha I/O externo no caminho). Ao ligar a triagem Haiku de verdade — chamada de rede com timeout de até 15s — ficou claro que segurar a conexão HTTP da Evolution por esse tempo violava o ARCHITECTURE.md §5 e arriscava reentrega por timeout. O implementador escalou a decisão em vez de seguir a spec às cegas; a saída (ACK imediato + processamento em background no mesmo processo + varredura de recuperação no boot com teto por subida) está registrada no [ADR-018](../adr/ADR-018-webhook-ack-processamento-assincrono.md) e foi decidida antes de codar, não depois. Isso adicionou uma máquina de estados nova em `messages` (`pending`/`failed`) e o método `waitForPendingProcessing` em `App` (só para teste — nunca usado no boot real), que não constavam da spec original.
+
+  2. **Data relativa nunca sai do Haiku como data absoluta** — isso já estava implícito no ADR-006, mas a primeira versão da triagem (antes do review) deixava o modelo tentar calcular a data. O review classificou isso como achado bloqueante: o Haiku não tem como saber o dia de hoje nem o fuso sem alucinar. A correção (`c7ea07e`) trocou o contrato: a triagem devolve `dueExpression` (a expressão como o usuário falou — "sexta 14h", "amanhã") e o backend resolve com `parseRelativeDatePtBr` em `America/Sao_Paulo`, com `now` sempre injetado. Expressão que o parser não reconhece não vira `dueAt`: o item cai em `inbox` e a confirmação avisa que não entendeu a data, sem perguntar estrutura.
+
+  3. **`snoozeCount`, não `adiamentos_count`.** O ER do PRD/ARCHITECTURE usa o nome em português; o CODE_STYLE.md §1 exige identificador em inglês. A coluna física (`ItemRecord.snoozeCount` em `src/modules/tasks/domain/item.ts`) segue a regra de estilo, não o nome literal do ER — é desvio de nome, não de comportamento: a garantia central (nunca expor esse valor ao usuário) está testada em `tests/unit/tasks-tools.test.ts` por asserção direta no payload de `list_items`, não só na formatação da mensagem.
+
+  4. **Matcher de resposta numérica não entrou.** A spec (linha "Padrões resolvidos por código... e respostas numéricas referentes ao último item citado na conversa") previa isso no executor desta feature. Na prática, "responder com o número 2 pra dizer qual item" só faz sentido quando existe um menu numerado na conversa — e isso é `modules/nudges` (RF-08, cobrança/fechamento de loop), que não existe ainda. Implementar o matcher agora seria código morto (nunca acionado, porque nada nesta feature numera itens numa mensagem). Fica para quando `nudges` existir e definir o contrato de "último menu mostrado".
+
+- **Desvios de escopo/arquitetura registrados acima:** ADR-018 (processamento assíncrono, não estava na spec original), contrato de data relativa via `dueExpression` (correção do review, alinhada ao ADR-006), matcher de resposta numérica adiado para `modules/nudges`.
+- **PRs:** feature implementada direto na branch `feature/FEAT-002-task-store-captura` (commits `9f46509`, `a39a0d0`, `c7ea07e`); merge para `main` pendente de aprovação do dono do projeto.
+- **Migrações:** `001_tasks_items` (tabela `items`), `002_tasks_items_source_message` (`source_message_id`, idempotência por mensagem — insuficiente sozinha, ver 003), `003_tasks_items_source_item_index` (`source_item_index` + índice único parcial `(source_message_id, source_item_index) WHERE source_message_id IS NOT NULL` — idempotência granular por item, corrigida no review porque a versão por mensagem inteira perdia itens 2..N de uma captura multi-item que crashasse no meio).
+- **Pendências/débitos:** nenhum `TODO` novo aberto nesta feature. Itens que ficaram de fora são escopo futuro já mapeado em "Fora de escopo" (chains, rituals, nudges, hygiene, MCP) — não são débito desta entrega.
+- **Aprendizados:**
+  - O `jid` passado para `recordLlmUsage`/`onUsage` (registro de tokens, RF-15) é derivado da mensagem que está sendo processada (`triage-service.ts`), não mais um `ownerJid` fixo capturado no boot — importa se algum dia o sistema deixar de ser single-user, mas já é o padrão certo agora porque a varredura de recuperação processa mensagens de boots anteriores, potencialmente com contexto diferente do boot atual.
+  - Testes de segredo (`tests/security/anthropic-secrets.test.ts`) precisam esperar o processamento em background terminar (`waitForPendingProcessing`) antes de inspecionar o log — como o processamento não é mais síncrono ao webhook (ADR-018), um teste que verifica o log logo após o `inject()` responder corre antes da chamada ao Anthropic acontecer, e passa por acidente sem testar nada.
+  - `ANTHROPIC_API_KEY` está no `.env.example` deste repo, mas foi adição manual do dono do projeto — o arquivo tem ACL restrita para edição automatizada neste ambiente. Quem for adicionar env var nova precisa saber que essa etapa não é automatizável e não esquecer de pedir.
+  - **Nota de divergência spec × código:** a spec (Escopo, item 4) descreve o executor como parte de `modules/tasks` sem citar arquivo; ele vive em `src/modules/tasks/commands.ts`, exportando `buildTasksCommands`. Não é uma divergência de decisão (a spec já explicava por que não é módulo `commands` separado), só o caminho concreto do arquivo para quem for procurar.
