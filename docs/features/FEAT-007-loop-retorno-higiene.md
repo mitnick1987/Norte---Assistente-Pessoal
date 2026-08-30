@@ -1,6 +1,6 @@
 # FEAT-007 — Fechamento de loop, próxima ação, modo retorno e higiene
 
-**Status:** rascunho · **Issue:** #17 · **Branch:** `feature/FEAT-007-loop-retorno-higiene` · **Data:** 2026-08-30
+**Status:** entregue · **Issue:** #17 · **Branch:** `feature/FEAT-007-loop-retorno-higiene` · **Data:** 2026-08-30
 
 ## Contexto e objetivo
 
