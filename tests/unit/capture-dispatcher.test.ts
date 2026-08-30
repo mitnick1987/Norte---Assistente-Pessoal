@@ -21,7 +21,7 @@ function buildContext() {
   const itemService = new ItemService(new ItemsRepository(db));
   const jobRepository = new JobRepository(db);
   const outboxRepository = new OutboxRepository(db);
-  const captureService = new CaptureService(itemService, jobRepository);
+  const captureService = new CaptureService(itemService, jobRepository, db);
   return { db, outboxRepository, captureService };
 }
 

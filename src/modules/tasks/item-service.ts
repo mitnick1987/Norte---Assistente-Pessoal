@@ -18,6 +18,8 @@ export interface CreateItemParams {
   readonly status?: 'inbox' | 'ativa';
   /** Vínculo com a mensagem de origem (ADR-018) — usado pela varredura de recuperação para não duplicar gravação. */
   readonly sourceMessageId?: number;
+  /** Posição do item dentro da extração da triagem (ADR-018) — idempotência granular por item, não só por mensagem. */
+  readonly sourceItemIndex?: number;
 }
 
 export interface ListItemsParams {
@@ -45,13 +47,14 @@ export class ItemService {
       ...(params.priority !== undefined ? { priority: params.priority } : {}),
       ...(params.dueAt !== undefined ? { dueAt: params.dueAt } : {}),
       ...(params.sourceMessageId !== undefined ? { sourceMessageId: params.sourceMessageId } : {}),
+      ...(params.sourceItemIndex !== undefined ? { sourceItemIndex: params.sourceItemIndex } : {}),
     };
     return this.repository.create(input);
   }
 
-  /** Idempotência do reprocessamento (ADR-018): a varredura de boot consulta antes de acionar a captura de novo. */
-  hasItemFromMessage(sourceMessageId: number): boolean {
-    return this.repository.existsBySourceMessageId(sourceMessageId);
+  /** Idempotência granular por item (ADR-018): quais posições da extração dessa mensagem já foram gravadas. */
+  findCapturedItemIndexes(sourceMessageId: number): Set<number> {
+    return this.repository.findSourceItemIndexes(sourceMessageId);
   }
 
   private getOrThrow(id: number): ItemRecord {

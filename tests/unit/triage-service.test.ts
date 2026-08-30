@@ -25,14 +25,17 @@ describe('TriageService (round-trip do schema de triagem)', () => {
     }));
     const service = new TriageService({ provider, logger, onUsage });
 
-    const result = await service.classify('lembra de pagar o boleto');
+    const result = await service.classify('lembra de pagar o boleto', '5511999999999@s.whatsapp.net');
 
     expect(result.kind).toBe('ok');
     if (result.kind === 'ok') {
       expect(result.output.classification).toBe('captura');
       expect(result.output.items).toEqual([{ type: 'tarefa', title: 'pagar boleto' }]);
     }
-    expect(onUsage).toHaveBeenCalledWith({ tokensIn: 10, tokensOut: 5, cacheReadTokens: 0 });
+    expect(onUsage).toHaveBeenCalledWith(
+      { tokensIn: 10, tokensOut: 5, cacheReadTokens: 0 },
+      '5511999999999@s.whatsapp.net',
+    );
   });
 
   it('classificação ambígua cai em item com ambiguous=true, nunca em pergunta', async () => {
@@ -48,7 +51,7 @@ describe('TriageService (round-trip do schema de triagem)', () => {
     }));
     const service = new TriageService({ provider, logger, onUsage: vi.fn() });
 
-    const result = await service.classify('sei lá, alguma coisa');
+    const result = await service.classify('sei lá, alguma coisa', '5511999999999@s.whatsapp.net');
 
     expect(result.kind).toBe('ok');
     if (result.kind === 'ok') {
@@ -62,7 +65,7 @@ describe('TriageService (round-trip do schema de triagem)', () => {
     });
     const service = new TriageService({ provider, logger, onUsage: vi.fn() });
 
-    const result = await service.classify('qualquer coisa');
+    const result = await service.classify('qualquer coisa', '5511999999999@s.whatsapp.net');
 
     expect(result.kind).toBe('error');
   });
@@ -75,7 +78,7 @@ describe('TriageService (round-trip do schema de triagem)', () => {
     }));
     const service = new TriageService({ provider, logger, onUsage: vi.fn() });
 
-    const result = await service.classify('qualquer coisa');
+    const result = await service.classify('qualquer coisa', '5511999999999@s.whatsapp.net');
 
     expect(result.kind).toBe('error');
   });
@@ -88,7 +91,7 @@ describe('TriageService (round-trip do schema de triagem)', () => {
     }));
     const service = new TriageService({ provider, logger, onUsage: vi.fn() });
 
-    const result = await service.classify('qualquer coisa');
+    const result = await service.classify('qualquer coisa', '5511999999999@s.whatsapp.net');
 
     expect(result.kind).toBe('error');
   });
@@ -99,6 +102,6 @@ describe('TriageService (round-trip do schema de triagem)', () => {
     });
     const service = new TriageService({ provider, logger, onUsage: vi.fn() });
 
-    await expect(service.classify('qualquer coisa')).rejects.toThrow(TypeError);
+    await expect(service.classify('qualquer coisa', '5511999999999@s.whatsapp.net')).rejects.toThrow(TypeError);
   });
 });

@@ -1,7 +1,7 @@
 import type { Logger } from 'pino';
 import type { LlmProvider, LlmToolDefinition } from '../../core/llm/index.js';
 import { LlmRequestError } from '../../core/llm/index.js';
-import { TRIAGE_SYSTEM_PROMPT, triageOutputSchema, type TriageOutput } from './domain/index.js';
+import { buildTriageSystemPrompt, triageOutputSchema, type TriageOutput } from './domain/index.js';
 
 const TRIAGE_MODEL = 'claude-haiku-4-5-20251001';
 const TRIAGE_MAX_TOKENS = 1024;
@@ -24,7 +24,7 @@ const SUBMIT_TRIAGE_TOOL: LlmToolDefinition = {
           properties: {
             type: { type: 'string', enum: ['tarefa', 'ideia', 'compromisso', 'lembrete', 'nota'] },
             title: { type: 'string' },
-            dueAt: { type: 'string' },
+            dueExpression: { type: 'string' },
             ambiguous: { type: 'boolean' },
           },
         },
@@ -36,7 +36,9 @@ const SUBMIT_TRIAGE_TOOL: LlmToolDefinition = {
 export interface TriageServiceDeps {
   readonly provider: LlmProvider;
   readonly logger: Logger;
-  readonly onUsage: (usage: { tokensIn: number; tokensOut: number; cacheReadTokens: number }) => void;
+  readonly onUsage: (usage: { tokensIn: number; tokensOut: number; cacheReadTokens: number }, jid: string) => void;
+  /** Injetável para teste — o prompt embute a data/hora atual (TESTING.md §7). */
+  readonly now?: () => Date;
 }
 
 export type TriageResult = { readonly kind: 'ok'; readonly output: TriageOutput } | { readonly kind: 'error' };
@@ -48,19 +50,23 @@ export type TriageResult = { readonly kind: 'ok'; readonly output: TriageOutput 
  * resposta padrão, nunca em silêncio).
  */
 export class TriageService {
-  constructor(private readonly deps: TriageServiceDeps) {}
+  private readonly now: () => Date;
 
-  async classify(text: string): Promise<TriageResult> {
+  constructor(private readonly deps: TriageServiceDeps) {
+    this.now = deps.now ?? (() => new Date());
+  }
+
+  async classify(text: string, jid: string): Promise<TriageResult> {
     try {
       const result = await this.deps.provider.complete({
         model: TRIAGE_MODEL,
-        systemPrompt: TRIAGE_SYSTEM_PROMPT,
+        systemPrompt: buildTriageSystemPrompt(this.now()),
         messages: [{ role: 'user', content: text }],
         tools: [SUBMIT_TRIAGE_TOOL],
         maxTokens: TRIAGE_MAX_TOKENS,
       });
 
-      this.deps.onUsage(result.usage);
+      this.deps.onUsage(result.usage, jid);
 
       const call = result.toolCalls.find((c) => c.toolName === 'submit_triage');
       if (!call) {

@@ -5,7 +5,8 @@ export interface StubTriageResult {
   readonly items?: readonly {
     readonly type: 'tarefa' | 'ideia' | 'compromisso' | 'lembrete' | 'nota';
     readonly title: string;
-    readonly dueAt?: string;
+    /** Expressão relativa em PT-BR (ADR-006) — o backend resolve, nunca o modelo. */
+    readonly dueExpression?: string;
     readonly ambiguous?: boolean;
   }[];
   readonly usage?: { readonly input_tokens?: number; readonly output_tokens?: number; readonly cache_read_input_tokens?: number };

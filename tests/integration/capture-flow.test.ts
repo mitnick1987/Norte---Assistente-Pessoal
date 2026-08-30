@@ -6,6 +6,10 @@ import { anthropicToolUseResponse, anthropicErrorResponse, type StubTriageResult
 
 const OWNER_JID = '5511999999999@s.whatsapp.net';
 
+// terça-feira 2026-08-25 10:00 America/Sao_Paulo (13:00 UTC) — mesma referência
+// usada em tasks-date-parsing.test.ts; "sexta 14h" resolve para 2026-08-28T17:00:00.000Z UTC.
+const FIXED_NOW = new Date('2026-08-25T13:00:00.000Z');
+
 function textWebhookPayload(waMessageId: string, text: string) {
   return {
     event: 'messages.upsert',
@@ -32,7 +36,7 @@ describe('fluxo de captura de texto (FEAT-002, PRD §6 fluxo 5)', () => {
   let app: App;
 
   beforeEach(() => {
-    app = buildTestApp();
+    app = buildTestApp({}, { now: () => FIXED_NOW });
   });
 
   afterEach(async () => {
@@ -44,7 +48,7 @@ describe('fluxo de captura de texto (FEAT-002, PRD §6 fluxo 5)', () => {
   it('mensagem de texto -> triagem -> item gravado -> confirmação de 1 linha, sem pergunta', async () => {
     routedStub({
       classification: 'captura',
-      items: [{ type: 'tarefa', title: 'pagar o boleto', dueAt: '2026-08-28T17:00:00.000Z' }],
+      items: [{ type: 'tarefa', title: 'pagar o boleto', dueExpression: 'sexta 14h' }],
     });
 
     const response = await app.fastify.inject({
@@ -81,6 +85,41 @@ describe('fluxo de captura de texto (FEAT-002, PRD §6 fluxo 5)', () => {
       processing_status: string;
     };
     expect(message.processing_status).toBe('processed');
+  });
+
+  it('dueExpression não reconhecida (ADR-006): item cai em inbox sem job, confirmação avisa sem perguntar', async () => {
+    routedStub({
+      classification: 'captura',
+      items: [{ type: 'compromisso', title: 'dentista', dueExpression: 'lá pelas tantas' }],
+    });
+
+    const response = await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': 'a'.repeat(32) },
+      payload: textWebhookPayload('wa-1', 'marca dentista lá pelas tantas'),
+    });
+    expect(response.statusCode).toBe(200);
+
+    await app.waitForPendingProcessing();
+    await app.outboxProcessor.processPending();
+
+    const item = app.db.prepare('SELECT title, status, due_at FROM items').get() as {
+      title: string;
+      status: string;
+      due_at: string | null;
+    };
+    expect(item).toMatchObject({ title: 'dentista', status: 'inbox', due_at: null });
+
+    expect(app.db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE type = 'reminder'`).get()).toMatchObject({ c: 0 });
+
+    const outboxRow = app.db.prepare('SELECT body FROM outbox_messages WHERE jid = ?').get(OWNER_JID) as
+      | { body: string }
+      | undefined;
+    expect(outboxRow?.body).toBeDefined();
+    expect(outboxRow!.body).not.toMatch(/\?/);
+    expect(outboxRow!.body.split('\n')).toHaveLength(1);
+    expect(outboxRow!.body.toLowerCase()).toMatch(/não entendi|não ficou clara/);
   });
 
   it('"feito" é resolvido pelo executor determinístico, sem acionar a API da Anthropic', async () => {
@@ -125,7 +164,7 @@ describe('fluxo de captura de texto (FEAT-002, PRD §6 fluxo 5)', () => {
   it('lembrete pontual dispara por template no horário simulado, sem chamada ao LLM no caminho do disparo', async () => {
     routedStub({
       classification: 'captura',
-      items: [{ type: 'compromisso', title: 'dentista', dueAt: '2026-08-28T17:00:00.000Z' }],
+      items: [{ type: 'compromisso', title: 'dentista', dueExpression: 'sexta 14h' }],
     });
 
     await app.fastify.inject({

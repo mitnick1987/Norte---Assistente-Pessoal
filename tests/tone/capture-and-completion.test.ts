@@ -10,7 +10,7 @@ import { assertToneIsSafe } from './forbidden-patterns.js';
  */
 describe('suite de tom — confirmação de captura', () => {
   it('confirmação de item único nunca faz pergunta de estrutura', () => {
-    const message = buildCaptureConfirmation([{ type: 'tarefa', title: 'pagar boleto' }], 0);
+    const message = buildCaptureConfirmation([{ title: 'pagar boleto', dueExpressionUnresolved: false }], 0);
 
     assertToneIsSafe(message);
     expect(message).not.toMatch(/\?/);
@@ -20,8 +20,8 @@ describe('suite de tom — confirmação de captura', () => {
   it('confirmação de múltiplos itens é 1 linha, sem listar título por título', () => {
     const message = buildCaptureConfirmation(
       [
-        { type: 'tarefa', title: 'a' },
-        { type: 'ideia', title: 'b' },
+        { title: 'a', dueExpressionUnresolved: false },
+        { title: 'b', dueExpressionUnresolved: false },
       ],
       0,
     );
@@ -32,8 +32,19 @@ describe('suite de tom — confirmação de captura', () => {
 
   it('todas as variações de confirmação passam no filtro de tom', () => {
     for (let seed = 0; seed < 10; seed++) {
-      const message = buildCaptureConfirmation([{ type: 'nota', title: 'x' }], seed);
+      const message = buildCaptureConfirmation([{ title: 'x', dueExpressionUnresolved: false }], seed);
       assertToneIsSafe(message);
+    }
+  });
+
+  it('data não reconhecida gera aviso honesto em 1 linha, sem pergunta de estrutura (ADR-006)', () => {
+    for (let seed = 0; seed < 5; seed++) {
+      const message = buildCaptureConfirmation([{ title: 'dentista', dueExpressionUnresolved: true }], seed);
+
+      assertToneIsSafe(message);
+      expect(message).not.toMatch(/\?/);
+      expect(message.split('\n')).toHaveLength(1);
+      expect(message.toLowerCase()).toMatch(/não entendi|não ficou clara/);
     }
   });
 });

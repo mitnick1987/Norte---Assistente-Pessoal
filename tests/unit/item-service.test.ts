@@ -91,6 +91,17 @@ describe('ItemService', () => {
     expect(result).toBeUndefined();
   });
 
+  it('snoozeByText sobre item já adiado re-adia (adiada -> adiada é transição válida)', () => {
+    const service = buildService();
+    const item = service.create({ type: 'tarefa', title: 'x', origin: 'texto' });
+    service.snoozeByText(item.id, 'sexta');
+
+    const result = service.snoozeByText(item.id, 'segunda que vem');
+
+    expect(result?.status).toBe('adiada');
+    expect(result?.dueAt).toBe('2026-08-31T12:00:00.000Z');
+  });
+
   it('list nunca inclui itens em inbox por padrão', () => {
     const service = buildService();
     service.create({ type: 'tarefa', title: 'ambígua', origin: 'texto', status: 'inbox' });

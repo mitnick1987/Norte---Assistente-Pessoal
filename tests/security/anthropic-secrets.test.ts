@@ -63,6 +63,8 @@ describe('S9 (extensão FEAT-002): ANTHROPIC_API_KEY nunca aparece em log', () =
         headers: { 'x-webhook-secret': WEBHOOK_SECRET },
         payload: textPayload('wa-anthropic-1', 'oi, tudo bem?'),
       });
+      // O processamento (e o log de erro) acontece em background pós-ACK (ADR-018).
+      await app.waitForPendingProcessing();
     } finally {
       restore();
     }
@@ -88,6 +90,8 @@ describe('S9 (extensão FEAT-002): ANTHROPIC_API_KEY nunca aparece em log', () =
       headers: { 'x-webhook-secret': WEBHOOK_SECRET },
       payload: textPayload('wa-anthropic-2', 'oi, tudo bem?'),
     });
+    // A chamada à Anthropic acontece em background pós-ACK (ADR-018).
+    await app.waitForPendingProcessing();
 
     const anthropicCall = calls.find((c) => c.url.includes('api.anthropic.com'));
     expect(anthropicCall).toBeDefined();

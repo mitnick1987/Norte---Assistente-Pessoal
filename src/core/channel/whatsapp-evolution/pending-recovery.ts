@@ -23,7 +23,11 @@ export interface RecoverPendingMessagesDeps extends ProcessInboundDeps {
  * `pending` para sempre, mesmo comportamento do webhook (ver
  * webhook-route.ts, ramo sem `incoming.kind === 'text'`).
  */
-export async function recoverPendingMessages(deps: RecoverPendingMessagesDeps, thresholdMs: number): Promise<void> {
+export async function recoverPendingMessages(
+  deps: RecoverPendingMessagesDeps,
+  thresholdMs: number,
+  maxPerBoot: number,
+): Promise<void> {
   const now = deps.now ?? (() => new Date());
 
   const pending = deps.messageRepository.findPendingInbound().map((row) => ({
@@ -33,9 +37,16 @@ export async function recoverPendingMessages(deps: RecoverPendingMessagesDeps, t
     createdAt: parseSqliteUtcTimestamp(row.createdAt),
   }));
 
-  const eligible = selectRecoveryCandidates(pending, now(), thresholdMs);
+  const candidates = selectRecoveryCandidates(pending, now(), thresholdMs);
+  // Sem teto, dias de fila (máquina desligada, ADR-013) virariam rajada de
+  // LLM+envios na subida; o que sobra sai no boot seguinte.
+  const eligible = candidates.slice(0, maxPerBoot);
+  const leftBehind = candidates.length - eligible.length;
 
-  deps.logger.info({ count: eligible.length }, 'varredura de recuperação de mensagens pendentes no boot');
+  deps.logger.info({ count: eligible.length, leftBehind }, 'varredura de recuperação de mensagens pendentes no boot');
+  if (leftBehind > 0) {
+    deps.logger.warn({ leftBehind }, 'varredura atingiu o teto por boot; restantes ficam para a próxima subida');
+  }
 
   for (const message of eligible) {
     if (!message.body) {

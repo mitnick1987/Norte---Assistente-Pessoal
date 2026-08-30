@@ -9,3 +9,11 @@ export type { CreateItemParams, ListItemsParams } from '../item-service.js';
 export { ItemNotFoundError } from '../item-service.js';
 export type { ItemType, ItemOrigin, ItemStatus, ItemPriority, ItemRecord } from '../domain/index.js';
 export { InvalidStatusTransitionError } from '../domain/index.js';
+/**
+ * Exposto para `capture` resolver `dueExpression` da triagem (ADR-006): a
+ * mesma resolução determinística de data relativa usada por "adia" também
+ * resolve a expressão que o Haiku devolve — um único parser, um único
+ * contrato de fuso (America/Sao_Paulo).
+ */
+export { parseRelativeDatePtBr } from '../domain/index.js';
+export type { ParsedRelativeDate } from '../domain/index.js';

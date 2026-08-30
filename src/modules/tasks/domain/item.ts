@@ -44,7 +44,10 @@ const TRANSITIONS: Record<ItemStatus, readonly ItemStatus[]> = {
   inbox: ['ativa', 'em_andamento', 'feita', 'adiada', 'arquivada', 'dropada'],
   ativa: ['em_andamento', 'feita', 'adiada', 'arquivada', 'dropada'],
   em_andamento: ['feita', 'adiada', 'arquivada', 'dropada'],
-  adiada: ['ativa', 'em_andamento', 'feita', 'arquivada', 'dropada'],
+  // adiada -> adiada é permitida de propósito: "adia" de novo sobre um item
+  // já adiado é re-adiar (empurrar a data), não uma reativação — o mesmo
+  // verbo de negócio agindo de novo, não um estado novo saindo do nada.
+  adiada: ['ativa', 'em_andamento', 'feita', 'adiada', 'arquivada', 'dropada'],
   feita: [],
   arquivada: [],
   dropada: [],

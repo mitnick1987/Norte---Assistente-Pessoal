@@ -78,6 +78,20 @@ describe('executor determinístico de comandos (RF-07)', () => {
     expect(found?.status).toBe('adiada');
   });
 
+  it('segundo "adia" sobre item já adiado re-adia e responde normalmente, sem exceção nem silêncio', async () => {
+    const { service, commands } = buildCommands();
+    const item = service.create({ type: 'tarefa', title: 'x', origin: 'texto' });
+
+    const snooze = findCommand(commands, 'tasks.snooze');
+    await snooze.handle({ text: 'adia sexta', ownerJid: OWNER_JID });
+
+    const result = await snooze.handle({ text: 'adia segunda que vem', ownerJid: OWNER_JID });
+
+    expect(result.replyText).toBe('Adiei.');
+    const found = service.list({ includeInbox: true }).find((i) => i.id === item.id);
+    expect(found?.status).toBe('adiada');
+  });
+
   it('"adia" com data não reconhecida não altera o item e responde honestamente', async () => {
     const { service, commands } = buildCommands();
     const item = service.create({ type: 'tarefa', title: 'x', origin: 'texto' });

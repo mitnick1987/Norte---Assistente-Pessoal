@@ -74,7 +74,19 @@ export class AnthropicApiKeyProvider implements LlmProvider {
       clearTimeout(timer);
     }
 
-    const body = (await response.json()) as AnthropicResponseBody;
+    // Gateway/proxy intermediário (Caddy, CDN, load balancer) pode responder
+    // 502/503/504 com corpo HTML/texto em vez de JSON — response.json() lança
+    // SyntaxError nesse caso, que não é LlmRequestError e escaparia do
+    // tratamento de erro da triagem (silêncio proibido, ver spec item 2).
+    let body: AnthropicResponseBody;
+    try {
+      body = (await response.json()) as AnthropicResponseBody;
+    } catch (err) {
+      throw new LlmRequestError(
+        `API da Anthropic respondeu ${response.status} com corpo não-JSON`,
+        err,
+      );
+    }
 
     if (!response.ok) {
       throw new LlmRequestError(

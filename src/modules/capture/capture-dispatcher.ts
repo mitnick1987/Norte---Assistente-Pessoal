@@ -34,7 +34,7 @@ export function buildCaptureDispatcher(
   const now = deps.now ?? (() => new Date());
 
   return async (text: string, jid: string, messageId: number): Promise<void> => {
-    const result = await deps.triageService.classify(text);
+    const result = await deps.triageService.classify(text, jid);
 
     if (result.kind === 'error') {
       deps.outboxRepository.enqueue({ jid, body: pickConversationFallback(now().getTime()), isProactive: false });
@@ -46,9 +46,19 @@ export function buildCaptureDispatcher(
       return;
     }
 
-    deps.captureService.captureItems(result.output.items, messageId);
+    const captured = deps.captureService.captureItems(result.output.items, messageId, now());
 
-    const confirmation = buildCaptureConfirmation(result.output.items, now().getTime());
+    // Reprocessamento idempotente (ADR-018): `captured` vem vazio quando a
+    // mensagem já tinha gravado os itens numa tentativa anterior. A
+    // confirmação ainda pode sair de novo (aceitável pela ADR) — usamos os
+    // itens originais da triagem só pra manter contagem/título corretos,
+    // sem o aviso de data (não sabemos mais se foi resolvida da vez passada).
+    const confirmationItems =
+      captured.length > 0
+        ? captured
+        : result.output.items.map((item) => ({ title: item.title, dueExpressionUnresolved: false }));
+
+    const confirmation = buildCaptureConfirmation(confirmationItems, now().getTime());
     deps.outboxRepository.enqueue({ jid, body: confirmation, isProactive: false });
   };
 }

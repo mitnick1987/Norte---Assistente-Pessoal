@@ -79,6 +79,42 @@ describe('AnthropicApiKeyProvider', () => {
     ).rejects.toThrow(LlmRequestError);
   });
 
+  it('erro HTTP (502 de gateway) com corpo HTML não-JSON vira LlmRequestError, nunca SyntaxError', async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response('<html><body>502 Bad Gateway</body></html>', {
+          status: 502,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+    );
+    const provider = new AnthropicApiKeyProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await expect(
+      provider.complete({
+        model: 'claude-haiku-4-5-20251001',
+        systemPrompt: 'sistema',
+        messages: [{ role: 'user', content: 'oi' }],
+        maxTokens: 100,
+      }),
+    ).rejects.toThrow(LlmRequestError);
+  });
+
+  it('resposta 2xx com corpo não-JSON vira LlmRequestError, nunca SyntaxError', async () => {
+    const fetchFn = vi.fn(
+      async () => new Response('não é json', { status: 200, headers: { 'Content-Type': 'text/plain' } }),
+    );
+    const provider = new AnthropicApiKeyProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await expect(
+      provider.complete({
+        model: 'claude-haiku-4-5-20251001',
+        systemPrompt: 'sistema',
+        messages: [{ role: 'user', content: 'oi' }],
+        maxTokens: 100,
+      }),
+    ).rejects.toThrow(LlmRequestError);
+  });
+
   it('falha de rede vira LlmRequestError', async () => {
     const fetchFn = vi.fn(async () => {
       throw new Error('ECONNREFUSED');

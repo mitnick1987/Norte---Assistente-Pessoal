@@ -1,3 +1,4 @@
+import type { Database } from 'better-sqlite3';
 import type { Logger } from 'pino';
 import type { ModuleManifest } from '../../core/kernel/types.js';
 import type { LlmProvider } from '../../core/llm/index.js';
@@ -18,6 +19,10 @@ export interface CaptureModuleDeps {
   readonly messageRepository: MessageRepository;
   readonly ownerJid: string;
   readonly logger: Logger;
+  /** Conexão compartilhada com `tasks`/`jobs` (mesmo `db`, ARCHITECTURE.md §2) — usada só para a transação item+job da captura (ADR-018). */
+  readonly db: Database;
+  /** Injetável para teste — data/hora do prompt da triagem e seleção de tom (TESTING.md §7). */
+  readonly now?: () => Date;
 }
 
 const TRIAGE_INTENT = 'triagem';
@@ -34,6 +39,15 @@ export const PENDING_RECOVERY_THRESHOLD_MS_SETTING = 'capture.pendingRecoveryThr
 const PENDING_RECOVERY_THRESHOLD_MS_DEFAULT = 60_000;
 
 /**
+ * Teto de mensagens reprocessadas por boot: uma fila pending muito grande
+ * (dias de máquina desligada no perfil local, ADR-013) não pode transformar
+ * a subida do processo numa rajada de chamadas de LLM e de envios — o que
+ * sobra fica para o boot seguinte e é logado.
+ */
+export const PENDING_RECOVERY_MAX_PER_BOOT_SETTING = 'capture.pendingRecoveryMaxPerBoot';
+const PENDING_RECOVERY_MAX_PER_BOOT_DEFAULT = 50;
+
+/**
  * `capture` não tem migração própria — grava exclusivamente via o
  * contrato público de `tasks` e via `core/scheduler`/`core/outbox`
  * (ARCHITECTURE.md §2). O dispatcher fica disponível à parte (não é
@@ -48,9 +62,10 @@ export function buildCaptureModule(deps: CaptureModuleDeps): {
   const triageService = new TriageService({
     provider: deps.llmProvider,
     logger: deps.logger,
-    onUsage: (usage) =>
+    ...(deps.now ? { now: deps.now } : {}),
+    onUsage: (usage, jid) =>
       deps.messageRepository.recordLlmUsage({
-        jid: deps.ownerJid,
+        jid,
         intent: TRIAGE_INTENT,
         tokensIn: usage.tokensIn,
         tokensOut: usage.tokensOut,
@@ -58,13 +73,14 @@ export function buildCaptureModule(deps: CaptureModuleDeps): {
       }),
   });
 
-  const captureService = new CaptureService(deps.itemService, deps.jobRepository);
+  const captureService = new CaptureService(deps.itemService, deps.jobRepository, deps.db);
 
   const dispatch = buildCaptureDispatcher({
     triageService,
     captureService,
     outboxRepository: deps.outboxRepository,
     logger: deps.logger,
+    ...(deps.now ? { now: deps.now } : {}),
   });
 
   const manifest: ModuleManifest = {
@@ -74,6 +90,7 @@ export function buildCaptureModule(deps: CaptureModuleDeps): {
     },
     settingsDefaults: {
       [PENDING_RECOVERY_THRESHOLD_MS_SETTING]: PENDING_RECOVERY_THRESHOLD_MS_DEFAULT,
+      [PENDING_RECOVERY_MAX_PER_BOOT_SETTING]: PENDING_RECOVERY_MAX_PER_BOOT_DEFAULT,
     },
   };
 

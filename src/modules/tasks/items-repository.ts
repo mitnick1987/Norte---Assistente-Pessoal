@@ -11,6 +11,7 @@ interface ItemRow {
   due_at: string | null;
   snooze_count: number;
   source_message_id: number | null;
+  source_item_index: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -31,6 +32,10 @@ function toRecord(row: ItemRow): ItemRecord {
   };
 }
 
+interface SourceItemIndexRow {
+  source_item_index: number | null;
+}
+
 export interface CreateItemInput {
   readonly type: ItemType;
   readonly title: string;
@@ -40,6 +45,8 @@ export interface CreateItemInput {
   readonly dueAt?: Date;
   /** Rastreia de qual mensagem de entrada o item veio (ADR-018) — permite a varredura de recuperação detectar reprocessamento e não duplicar a gravação. */
   readonly sourceMessageId?: number;
+  /** Posição do item dentro da extração da triagem (0-based) — idempotência granular por item, não só por mensagem (ADR-018). */
+  readonly sourceItemIndex?: number;
 }
 
 export interface ListItemsFilter {
@@ -58,8 +65,8 @@ export class ItemsRepository {
   create(input: CreateItemInput): ItemRecord {
     const result = this.db
       .prepare(
-        `INSERT INTO items (type, title, origin, status, priority, due_at, source_message_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO items (type, title, origin, status, priority, due_at, source_message_id, source_item_index)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.type,
@@ -69,17 +76,28 @@ export class ItemsRepository {
         input.priority ?? null,
         input.dueAt ? input.dueAt.toISOString() : null,
         input.sourceMessageId ?? null,
+        input.sourceItemIndex ?? null,
       );
 
     return this.findByIdOrThrow(Number(result.lastInsertRowid));
   }
 
-  /** Base da idempotência do reprocessamento (ADR-018): existe item gravado por essa mensagem? */
-  existsBySourceMessageId(sourceMessageId: number): boolean {
-    const row = this.db
-      .prepare<[number], { c: number }>('SELECT COUNT(*) as c FROM items WHERE source_message_id = ?')
-      .get(sourceMessageId);
-    return (row?.c ?? 0) > 0;
+  /**
+   * Idempotência do reprocessamento GRANULAR POR ITEM (ADR-018): retorna as
+   * posições já gravadas dessa mensagem, não só "existe algum item?". Uma
+   * captura de N itens que crashou no meio (item 0 gravado, 1..N-1 não)
+   * deixa a varredura completar só o que falta, em vez de pular a mensagem
+   * inteira. Item sem `source_item_index` (nenhum hoje, mas o schema
+   * permite) não entra no conjunto — não há como saber a posição dele.
+   */
+  findSourceItemIndexes(sourceMessageId: number): Set<number> {
+    const rows = this.db
+      .prepare<
+        [number],
+        SourceItemIndexRow
+      >('SELECT source_item_index FROM items WHERE source_message_id = ? AND source_item_index IS NOT NULL')
+      .all(sourceMessageId);
+    return new Set(rows.map((r) => r.source_item_index!));
   }
 
   findById(id: number): ItemRecord | undefined {

@@ -25,7 +25,11 @@ import { registerHealthRoute } from './core/health/index.js';
 import { EmailAlerter } from './infra-ops/index.js';
 import { AnthropicApiKeyProvider } from './core/llm/index.js';
 import { buildTasksModule } from './modules/tasks/public/index.js';
-import { buildCaptureModule, PENDING_RECOVERY_THRESHOLD_MS_SETTING } from './modules/capture/manifest.js';
+import {
+  buildCaptureModule,
+  PENDING_RECOVERY_THRESHOLD_MS_SETTING,
+  PENDING_RECOVERY_MAX_PER_BOOT_SETTING,
+} from './modules/capture/manifest.js';
 
 const OUTBOX_INTERVAL_MS = 5_000;
 const PENDING_PROCESSING_POLL_MS = 20;
@@ -73,6 +77,8 @@ export interface BuildAppOverrides {
   readonly outboxRandom?: () => number;
   /** Desliga o autoprovisionamento do webhook — testes de integração não têm Evolution real para chamar. */
   readonly provisionWebhook?: boolean;
+  /** Relógio fixo da triagem (prompt + resolução de dueExpression) e da seleção de tom — nunca usado no boot real. */
+  readonly now?: () => Date;
 }
 
 export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
@@ -97,6 +103,8 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     messageRepository,
     ownerJid: env.OWNER_WHATSAPP_JID,
     logger,
+    db,
+    ...(overrides.now ? { now: overrides.now } : {}),
   });
 
   const registry = new KernelRegistry();
@@ -179,6 +187,9 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
       const thresholdMs =
         settings.get<number>(PENDING_RECOVERY_THRESHOLD_MS_SETTING) ??
         registry.getSettingsDefaults()[PENDING_RECOVERY_THRESHOLD_MS_SETTING];
+      const maxPerBoot =
+        settings.get<number>(PENDING_RECOVERY_MAX_PER_BOOT_SETTING) ??
+        registry.getSettingsDefaults()[PENDING_RECOVERY_MAX_PER_BOOT_SETTING];
       await recoverPendingMessages(
         {
           messageRepository,
@@ -189,6 +200,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
           logger,
         },
         Number(thresholdMs),
+        Number(maxPerBoot),
       );
 
       await scheduler.runCatchUp();

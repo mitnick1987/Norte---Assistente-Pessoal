@@ -22,7 +22,7 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/); 
 - Gate humano de merge: PR com seção "Onde olhar primeiro" e reporte de entrega com "onde olhar em 5 minutos".
 
 ### Alterado
-- `core/env.ts`: nova variável obrigatória `ANTHROPIC_API_KEY` (área sensível — chave de API em texto, nunca em log, ver SECURITY.md §4); `.env.example` teria a chave documentada, mas o arquivo tem ACL restrita neste ambiente e não pôde ser editado (mesma pendência já registrada na FEAT-001 — o `env_file: ../.env` do `docker-compose.yml` já injeta a variável no container assim que existir no `.env` do host, sem mudança adicional de infra).
+- `core/env.ts`: nova variável obrigatória `ANTHROPIC_API_KEY` (área sensível — chave de API em texto, nunca em log, ver SECURITY.md §4); a chave está documentada no `.env.example` (adicionada manualmente pelo dono — o arquivo tem ACL restrita para edição automatizada) e o `env_file: ../.env` do `docker-compose.yml` injeta a variável no container assim que existir no `.env` do host.
 - `core/channel/whatsapp-evolution/webhook-route.ts`: novo ponto de extensão opcional `onUnmatchedText` — acionado quando nenhum `CommandMatcher` reconhece o texto recebido, mantendo `core` sem conhecer módulos (ARCHITECTURE.md §2); é como `capture` entra no fluxo do webhook.
 - `core/channel/message-repository.ts`: novo método `recordLlmUsage` (base do monitor de custo, RF-15).
 - `core/logger.ts`: `ANTHROPIC_API_KEY` e o header `x-api-key` adicionados à lista de redação de log (SECURITY.md §4).

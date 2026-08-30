@@ -1,5 +1,3 @@
-import type { TriageItem } from './triage-schema.js';
-
 /**
  * Confirmação de captura em 1 linha (RF-01, RF-14): nunca pergunta nada,
  * nunca menciona estrutura. Um item cita o título; múltiplos itens só
@@ -11,18 +9,37 @@ const SINGLE_ITEM_VARIATIONS = ['Anotei: {title}.', 'Beleza, anotado: {title}.',
 
 const MULTI_ITEM_VARIATIONS = ['Anotei {count} itens.', 'Peguei os {count} itens, todos anotados.'] as const;
 
+/**
+ * Quando `dueExpression` veio da triagem mas o parser determinístico não
+ * reconheceu (ADR-006): o item ainda é gravado (cai em inbox), só que sem
+ * data. A confirmação avisa isso em vez de fingir que agendou um lembrete —
+ * honesto, mas nunca uma pergunta pedindo pra especificar a data de novo.
+ */
+const DATE_UNRESOLVED_SUFFIX_VARIATIONS = [
+  ' Não entendi a data, então deixei sem lembrete.',
+  ' A data não ficou clara pra mim, guardei sem lembrete.',
+] as const;
+
 function pick<T extends readonly string[]>(variations: T, seed: number): T[number] {
   const index = ((seed % variations.length) + variations.length) % variations.length;
   return variations[index]!;
 }
 
-export function buildCaptureConfirmation(items: readonly TriageItem[], seed: number): string {
+export interface CaptureConfirmationItem {
+  readonly title: string;
+  readonly dueExpressionUnresolved: boolean;
+}
+
+export function buildCaptureConfirmation(items: readonly CaptureConfirmationItem[], seed: number): string {
+  const anyDateUnresolved = items.some((item) => item.dueExpressionUnresolved);
+  const suffix = anyDateUnresolved ? pick(DATE_UNRESOLVED_SUFFIX_VARIATIONS, seed) : '';
+
   if (items.length === 1) {
     const template = pick(SINGLE_ITEM_VARIATIONS, seed);
-    return template.replace('{title}', items[0]!.title);
+    return template.replace('{title}', items[0]!.title) + suffix;
   }
   const template = pick(MULTI_ITEM_VARIATIONS, seed);
-  return template.replace('{count}', String(items.length));
+  return template.replace('{count}', String(items.length)) + suffix;
 }
 
 /**
