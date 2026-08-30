@@ -22,6 +22,7 @@ export function anthropicToolUseResponse(result: StubTriageResult): Response {
     content: [
       {
         type: 'tool_use',
+        id: 'tc_1',
         name: 'submit_triage',
         input: { classification: result.classification, items: result.items ?? [] },
       },
@@ -36,4 +37,47 @@ export function anthropicToolUseResponse(result: StubTriageResult): Response {
 
 export function anthropicErrorResponse(status: number, message = 'erro simulado'): Response {
   return jsonResponse(status, { error: { message } });
+}
+
+export interface StubUsage {
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  readonly cache_read_input_tokens?: number;
+}
+
+/** Resposta só de texto (sem tool_use) — usada pelo brain quando o modelo termina o turno ou pelos rituais (redação sem tool use). */
+export function anthropicTextResponse(text: string, usage: StubUsage = {}): Response {
+  return jsonResponse(200, {
+    content: [{ type: 'text', text }],
+    usage: {
+      input_tokens: usage.input_tokens ?? 100,
+      output_tokens: usage.output_tokens ?? 50,
+      cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+    },
+  });
+}
+
+export interface StubToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly input: unknown;
+}
+
+/** Resposta com uma ou mais tool calls arbitrárias (brain-loop, FEAT-006) — diferente de `anthropicToolUseResponse`, que é específico do formato `submit_triage` da triagem. */
+export function anthropicBrainToolUseResponse(
+  toolCalls: readonly StubToolCall[],
+  usage: StubUsage = {},
+  text?: string,
+): Response {
+  return jsonResponse(200, {
+    content: [
+      ...(text ? [{ type: 'text', text }] : []),
+      ...toolCalls.map((call) => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
+    ],
+    usage: {
+      input_tokens: usage.input_tokens ?? 100,
+      output_tokens: usage.output_tokens ?? 50,
+      cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+    },
+  });
 }

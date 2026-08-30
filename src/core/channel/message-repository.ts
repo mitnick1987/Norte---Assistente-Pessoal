@@ -132,6 +132,28 @@ export class MessageRepository {
    * não depender de comparação de string de data em SQL (created_at usa
    * `datetime('now')`, formato diferente de `Date#toISOString()`).
    */
+  /**
+   * Janela de conversa recente do brain (FEAT-006, spec item 4): só texto
+   * final de cada turno (`body IS NOT NULL` exclui as linhas que
+   * `recordLlmUsage` grava para o monitor de custo, que não são turno de
+   * conversa nenhum). Ordena por mais recente para aplicar o `limit` e
+   * inverte depois — é o jeito barato de pegar "os N últimos" sem varrer a
+   * tabela inteira em bancos que cresçam grandes.
+   */
+  findRecentConversation(jid: string, limit: number): { direction: 'in' | 'out'; body: string }[] {
+    const rows = this.db
+      .prepare<
+        [string, number],
+        { direction: 'in' | 'out'; body: string }
+      >(
+        `SELECT direction, body FROM messages
+         WHERE jid = ? AND body IS NOT NULL
+         ORDER BY id DESC LIMIT ?`,
+      )
+      .all(jid, limit);
+    return rows.reverse();
+  }
+
   findPendingInbound(): PendingMessageRow[] {
     return this.db
       .prepare<

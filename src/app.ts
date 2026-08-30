@@ -23,7 +23,7 @@ import {
 } from './core/channel/whatsapp-evolution/index.js';
 import { registerHealthRoute } from './core/health/index.js';
 import { EmailAlerter } from './infra-ops/index.js';
-import { AnthropicApiKeyProvider } from './core/llm/index.js';
+import { AnthropicApiKeyProvider, type LlmUsage } from './core/llm/index.js';
 import { GroqSttProvider, OpenAiWhisperProvider, SttRouter } from './core/stt/index.js';
 import { buildTasksModule } from './modules/tasks/public/index.js';
 import { buildChainsModule } from './modules/chains/public/index.js';
@@ -37,9 +37,18 @@ import {
   CHAINS_DESLOCAMENTO_MIN_DEFAULT_DEFAULT,
   CHAINS_DESLOCAMENTO_MIN_DEFAULT_SETTING,
 } from './modules/chains/public/index.js';
+import {
+  buildRitualsModule,
+  seedRitualJobs,
+  BRIEFING_HOUR_SETTING,
+  BRIEFING_MINUTE_SETTING,
+  REVISAO_HOUR_SETTING,
+  REVISAO_MINUTE_SETTING,
+} from './modules/rituals/public/index.js';
 
 const OUTBOX_INTERVAL_MS = 5_000;
 const PENDING_PROCESSING_POLL_MS = 20;
+const BRAIN_CONVERSATION_INTENT = 'conversa';
 
 /**
  * npm_package_version só existe quando o processo nasce de `npm run` — o
@@ -167,6 +176,17 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
       })
     : undefined;
 
+  // `registry` é declarado antes de `capture` para os thunks
+  // `getBrainTools`/`getActiveModules` fecharem sobre a mesma instância que
+  // vai receber `register()` logo abaixo — em tempo de request (quando o
+  // dispatcher de fato chama o brain) o registry já está completo, mesmo que
+  // no instante em que `buildCaptureModule` roda ele ainda esteja vazio
+  // (FEAT-006: `capture` não pode importar `google-calendar`/`rituals`
+  // diretamente, então não há como montar a lista de tools antes de todos os
+  // módulos existirem).
+  // eslint-disable-next-line prefer-const -- atribuído uma única vez, mas precisa existir como `let` antes das closures abaixo capturarem o binding (elas só leem o valor quando chamadas, bem depois da atribuição real).
+  let registry: KernelRegistry;
+
   const {
     manifest: captureManifest,
     dispatch: dispatchCapture,
@@ -187,13 +207,50 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     logger,
     db,
     ...(googleCalendarModule ? { googleCalendarService: googleCalendarModule.service } : {}),
+    getBrainTools: () => registry.getTools(),
+    getActiveModules: () => registry.getModules(),
+    onBrainUsage: (usage) =>
+      messageRepository.recordLlmUsage({
+        jid: env.OWNER_WHATSAPP_JID,
+        intent: BRAIN_CONVERSATION_INTENT,
+        tokensIn: usage.tokensIn,
+        tokensOut: usage.tokensOut,
+        cacheReadTokens: usage.cacheReadTokens,
+      }),
     ...(overrides.now ? { now: overrides.now } : {}),
   });
 
-  const registry = new KernelRegistry();
+  const ritualsModuleDeps = {
+    itemService,
+    jobRepository,
+    outboxRepository,
+    llmProvider,
+    getActiveModules: () => registry.getModules(),
+    ownerJid: env.OWNER_WHATSAPP_JID,
+    logger,
+    ...(googleCalendarModule ? { agendaPort: googleCalendarModule.service } : {}),
+    onUsage: (usage: LlmUsage, intent: 'briefing' | 'revisao') =>
+      messageRepository.recordLlmUsage({
+        jid: env.OWNER_WHATSAPP_JID,
+        intent,
+        tokensIn: usage.tokensIn,
+        tokensOut: usage.tokensOut,
+        cacheReadTokens: usage.cacheReadTokens,
+      }),
+    getBriefingHour: () => Number(settings.get<number>(BRIEFING_HOUR_SETTING) ?? 7),
+    getBriefingMinute: () => Number(settings.get<number>(BRIEFING_MINUTE_SETTING) ?? 40),
+    getRevisaoHour: () => Number(settings.get<number>(REVISAO_HOUR_SETTING) ?? 21),
+    getRevisaoMinute: () => Number(settings.get<number>(REVISAO_MINUTE_SETTING) ?? 30),
+    ...(overrides.now ? { now: overrides.now } : {}),
+  };
+
+  const { manifest: ritualsManifest } = buildRitualsModule(ritualsModuleDeps);
+
+  registry = new KernelRegistry();
   registry.register(tasksManifest);
   registry.register(chainsManifest);
   registry.register(captureManifest);
+  registry.register(ritualsManifest);
   if (googleCalendarModule) registry.register(googleCalendarModule.manifest);
 
   runMigrations(db, [...coreMigrations, ...registry.getMigrations()]);
@@ -206,6 +263,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     repository: jobRepository,
     jobHandlers: registry.getJobHandlers(),
     logger,
+    ...(overrides.now ? { now: overrides.now } : {}),
   });
 
   const connectionWatchdog = new ConnectionWatchdog();
@@ -287,6 +345,11 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
         Number(thresholdMs),
         Number(maxPerBoot),
       );
+
+      // Job durável, nunca cron em memória (ADR-004): seed idempotente da
+      // primeira ocorrência de briefing/revisão — a partir daí o próprio
+      // scheduler recalcula a recorrência diária no momento do disparo.
+      seedRitualJobs(ritualsModuleDeps, jobRepository);
 
       await scheduler.runCatchUp();
       scheduler.start();

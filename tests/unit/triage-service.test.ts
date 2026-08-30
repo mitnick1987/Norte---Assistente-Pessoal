@@ -17,6 +17,7 @@ describe('TriageService (round-trip do schema de triagem)', () => {
       text: undefined,
       toolCalls: [
         {
+          id: 'tc_1',
           toolName: 'submit_triage',
           input: { classification: 'captura', items: [{ type: 'tarefa', title: 'pagar boleto' }] },
         },
@@ -43,6 +44,7 @@ describe('TriageService (round-trip do schema de triagem)', () => {
       text: undefined,
       toolCalls: [
         {
+          id: 'tc_1',
           toolName: 'submit_triage',
           input: { classification: 'captura', items: [{ type: 'nota', title: 'algo incerto', ambiguous: true }] },
         },
@@ -73,7 +75,7 @@ describe('TriageService (round-trip do schema de triagem)', () => {
   it('saída fora do schema (tool call malformada) vira { kind: "error" }', async () => {
     const provider = buildProvider(async () => ({
       text: undefined,
-      toolCalls: [{ toolName: 'submit_triage', input: { classification: 'inválida-fora-do-enum' } }],
+      toolCalls: [{ id: 'tc_1', toolName: 'submit_triage', input: { classification: 'inválida-fora-do-enum' } }],
       usage: { tokensIn: 1, tokensOut: 1, cacheReadTokens: 0 },
     }));
     const service = new TriageService({ provider, logger, onUsage: vi.fn() });

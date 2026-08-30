@@ -1,14 +1,25 @@
 import type { Logger } from 'pino';
 import type { OutboxRepository } from '../../core/outbox/index.js';
+import { LlmRequestError } from '../../core/llm/index.js';
 import { buildCaptureConfirmation, pickConversationFallback } from './domain/index.js';
 import type { CaptureService } from './capture-service.js';
 import type { TriageService } from './triage-service.js';
+import type { BrainService, RecentMessage } from './brain-service.js';
 
 export interface CaptureDispatcherDeps {
   readonly triageService: TriageService;
   readonly captureService: CaptureService;
   readonly outboxRepository: OutboxRepository;
   readonly logger: Logger;
+  /**
+   * Ausente só em teste que não exercita conversa livre — em produção
+   * sempre presente (`buildApp` sempre monta o brain, ANTHROPIC_API_KEY é
+   * obrigatória no boot). Quando ausente, `conversa` cai na resposta fixa
+   * honesta (mesmo comportamento pré-FEAT-006).
+   */
+  readonly brainService?: BrainService;
+  /** Janela de conversa recente (spec item 4) — vem de `messageRepository.findRecentConversation`, nunca lida direto por este módulo. */
+  readonly getRecentConversation?: (jid: string) => readonly RecentMessage[];
   /** Injetável para teste — a seleção de variação de tom precisa ser reproduzível (TESTING.md §7). */
   now?: () => Date;
 }
@@ -19,30 +30,55 @@ export interface CaptureDispatcherDeps {
  * aqui). Fluxo 5 do PRD §6: triagem Haiku decide captura | comando | conversa.
  *
  * "comando" da triagem (ex.: variação de linguagem que o executor por
- * regex não pegou) ainda não tem um segundo executor aqui — nesta feature,
- * qualquer coisa que não seja "captura" cai na resposta padrão de conversa,
- * honesta sobre o que o sistema ainda não faz (spec, item 5).
+ * regex não pegou) ainda não tem um segundo executor aqui — cai em
+ * `conversa` como qualquer outra pergunta (FEAT-006 liga o brain de verdade
+ * para esse caso; RF-09 "qual a próxima?" fica de fora por decisão da spec,
+ * ver Decisões tomadas da FEAT-006).
  *
  * `messageId` (ADR-018) é o vínculo de idempotência: se a varredura de
  * recuperação chamar isto de novo para a mesma mensagem, `captureItems` já
  * detecta os itens gravados na tentativa anterior e não duplica — a
- * confirmação pode sair de novo (aceitável pela ADR), a gravação não.
+ * confirmação pode sair de novo (aceitável pela ADR), a gravação não. O
+ * brain de conversa não tem essa mesma garantia (não há uma "gravação"
+ * única para deduplicar): reprocessamento de uma mensagem de `conversa`
+ * pode gerar uma segunda resposta, mesma tolerância que a resposta fixa já
+ * tinha antes desta feature.
  */
 export function buildCaptureDispatcher(
   deps: CaptureDispatcherDeps,
 ): (text: string, jid: string, messageId: number) => Promise<void> {
   const now = deps.now ?? (() => new Date());
 
-  return async (text: string, jid: string, messageId: number): Promise<void> => {
-    const result = await deps.triageService.classify(text, jid);
-
-    if (result.kind === 'error') {
+  const replyConversation = async (text: string, jid: string): Promise<void> => {
+    if (!deps.brainService) {
       deps.outboxRepository.enqueue({ jid, body: pickConversationFallback(now().getTime()), isProactive: false });
       return;
     }
 
+    try {
+      const history = deps.getRecentConversation?.(jid) ?? [];
+      const reply = await deps.brainService.reply(text, history);
+      deps.outboxRepository.enqueue({ jid, body: reply, isProactive: false });
+    } catch (err) {
+      if (err instanceof LlmRequestError) {
+        deps.logger.warn({ err }, 'brain: falha ao chamar o Sonnet, caindo em resposta padrão de conversa');
+        deps.outboxRepository.enqueue({ jid, body: pickConversationFallback(now().getTime()), isProactive: false });
+        return;
+      }
+      throw err;
+    }
+  };
+
+  return async (text: string, jid: string, messageId: number): Promise<void> => {
+    const result = await deps.triageService.classify(text, jid);
+
+    if (result.kind === 'error') {
+      await replyConversation(text, jid);
+      return;
+    }
+
     if (result.output.classification !== 'captura' || result.output.items.length === 0) {
-      deps.outboxRepository.enqueue({ jid, body: pickConversationFallback(now().getTime()), isProactive: false });
+      await replyConversation(text, jid);
       return;
     }
 

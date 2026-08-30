@@ -9,6 +9,7 @@ import { AuthTokensRepository } from './auth-tokens-repository.js';
 import { GoogleOAuthClient } from './google-oauth-client.js';
 import { TokenCipher } from './token-cipher.js';
 import { GoogleCalendarService } from './google-calendar-service.js';
+import { buildGoogleCalendarTools } from './tools.js';
 
 export interface GoogleCalendarConfig {
   readonly clientId: string;
@@ -32,12 +33,12 @@ export interface BuildGoogleCalendarModuleDeps {
 }
 
 /**
- * `google-calendar` (RF-12, spec FEAT-005): migração própria de
- * `auth_tokens` (não pertence a `tasks`, Decisões tomadas), sem tools nem
- * commands nesta entrega — a leitura (`list_events`) é exposta pelo
- * contrato público do módulo para o futuro briefing (FEAT-006) consumir
- * diretamente, e a escrita interativa (`create_event`) ainda depende de uma
- * decisão de arquitetura em aberto (ver Entrega da spec).
+ * `google-calendar` (RF-12, spec FEAT-005; tool `create_event` FEAT-006):
+ * migração própria de `auth_tokens` (não pertence a `tasks`, Decisões
+ * tomadas). A leitura (`list_events`) é exposta pelo contrato público do
+ * módulo para o briefing consumir diretamente; a escrita interativa nasce
+ * aqui como tool do brain, sempre pelo mesmo `GoogleCalendarService` que o
+ * caminho determinístico da captura usa (ADR-019).
  */
 export function buildGoogleCalendarModule(deps: BuildGoogleCalendarModuleDeps): {
   manifest: ModuleManifest;
@@ -68,6 +69,7 @@ export function buildGoogleCalendarModule(deps: BuildGoogleCalendarModuleDeps): 
   const manifest: ModuleManifest = {
     name: 'integrations-google-calendar',
     migrations: googleCalendarMigrations,
+    tools: buildGoogleCalendarTools(service),
   };
 
   return { manifest, service };

@@ -6,6 +6,7 @@ import {
   type ItemOrigin,
   type ItemPriority,
   type ItemRecord,
+  type ItemStatus,
   type ItemType,
   type TasksEventEmitter,
 } from './domain/index.js';
@@ -139,5 +140,10 @@ export class ItemService {
 
   findMostRecentActive(): ItemRecord | undefined {
     return this.repository.findMostRecentActive();
+  }
+
+  /** Itens que entraram em `status` dentro da janela — usado pelos rituais (briefing/revisão) para "o que fechou hoje"/"o que foi reagendado". */
+  listByStatusUpdatedBetween(status: ItemStatus, since: Date, until: Date): ItemRecord[] {
+    return this.repository.listByStatusUpdatedBetween(status, since.toISOString(), until.toISOString());
   }
 }

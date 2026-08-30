@@ -84,6 +84,18 @@ export class KernelRegistry {
   }
 
   /**
+   * Módulos ativos ordenados por nome, na forma mínima que `core/llm`
+   * precisa para montar o system prompt do brain (`buildBrainSystemPrompt`,
+   * ADR-007/FEAT-006) — usado quando o bloco de tom RSD-safe (fixo no core,
+   * não um `promptFragment` de módulo) precisa entrar depois dos fragmentos,
+   * fora deste método. `buildPrompt()` acima continua servindo quem só
+   * precisa da concatenação crua, sem o bloco de tom.
+   */
+  getModules(): readonly { readonly name: string; readonly promptFragment?: () => string }[] {
+    return this.sortedModules();
+  }
+
+  /**
    * Inscreve no bus todo handler de evento declarado pelos módulos — é
    * assim que "capture emite item.created, chains reage" (ARCHITECTURE.md
    * §2) vira código sem um módulo importar o outro diretamente. O kernel

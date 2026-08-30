@@ -9,6 +9,7 @@ import {
   AuthTokenNotFoundError,
   GOOGLE_CALENDAR_PROVIDER,
   mapGoogleEventToSync,
+  validateEventDates,
   type GoogleCalendarEvent,
 } from './domain/index.js';
 import type { AuthTokensRepository } from './auth-tokens-repository.js';
@@ -50,6 +51,27 @@ export interface CreateRemoteEventParams {
 
 export interface RemoteEventCreated {
   readonly gcalId: string;
+}
+
+export interface CreateEventFromBrainParams {
+  readonly title: string;
+  readonly startAt: Date;
+  readonly endAt: Date;
+  readonly local?: string;
+}
+
+export interface BrainEventCreated {
+  readonly itemId: number;
+  readonly eventId: number;
+  readonly gcalId: string;
+}
+
+/** Data fora do intervalo sensato (spec item 2, ADR-019) — nunca chega a chamar o Google nem a gravar item/event. */
+export class InvalidEventDateError extends Error {
+  constructor(reason: 'in_past' | 'too_far_in_future' | 'end_before_start') {
+    super(`data do evento fora do intervalo aceitável (${reason})`);
+    this.name = 'InvalidEventDateError';
+  }
 }
 
 /** Falha de refresh nunca mascara sucesso (spec item 2, ADR-010) — propaga para quem chamou, depois de já ter disparado o alerta por e-mail. */
@@ -221,6 +243,57 @@ export class GoogleCalendarService {
       ...(params.local !== undefined ? { location: params.local } : {}),
     });
     return { gcalId: inserted.gcalId };
+  }
+
+  /**
+   * Consumidor da tool `create_event` do brain (ADR-019, FEAT-006 item 2):
+   * cria o evento remoto e, na mesma operação, o espelho interno (item +
+   * event + cadeia) — o brain nunca grava no task-store diretamente, só
+   * invoca esta tool. Data fora de um intervalo sensato é rejeitada antes de
+   * chamar o Google (o backend não confia cegamente no `startAt` que o
+   * modelo formulou a partir da data injetada no prompt).
+   *
+   * A chamada ao Google é I/O de rede e não pode entrar no
+   * `db.transaction()` síncrono do better-sqlite3 — por isso acontece antes;
+   * uma falha aqui propaga sem tocar o task-store (nunca cria item órfão sem
+   * evento remoto). Item+event+cadeia gravados depois, na mesma transação
+   * que `syncEvent` usa, pelo mesmo motivo (crash no meio não pode deixar um
+   * sem o outro).
+   */
+  async createEventFromBrain(params: CreateEventFromBrainParams): Promise<BrainEventCreated> {
+    const validation = validateEventDates(params.startAt, params.endAt, this.now());
+    if (!validation.valid) {
+      throw new InvalidEventDateError(validation.reason);
+    }
+
+    const remote = await this.createRemoteEvent(params);
+
+    const run = this.deps.db.transaction(() => {
+      const item = this.deps.itemService.create({
+        type: 'compromisso',
+        title: params.title,
+        origin: 'texto',
+        status: 'ativa',
+        dueAt: params.startAt,
+      });
+
+      const event = this.deps.eventService.create({
+        itemId: item.id,
+        title: params.title,
+        startAt: params.startAt,
+        endAt: params.endAt,
+        deslocamentoMin: this.deps.getDeslocamentoMinDefault(),
+        gcalId: remote.gcalId,
+        ...(params.local !== undefined ? { local: params.local } : {}),
+      });
+
+      this.deps.chainService.scheduleForEvent(event);
+
+      return { itemId: item.id, eventId: event.id };
+    });
+
+    const { itemId, eventId } = run();
+    return { itemId, eventId, gcalId: remote.gcalId };
   }
 
   /**

@@ -129,6 +129,25 @@ export class ItemsRepository {
       .map(toRecord);
   }
 
+  /**
+   * Itens que transicionaram para `status` dentro da janela `[sinceIso,
+   * untilIso)` (RF-06, briefing/revisão): usa `updated_at` porque é o
+   * timestamp que a transição de status atualiza (item-service.ts) — não há
+   * coluna própria de "data da conclusão"/"data do reagendamento", e criar
+   * uma só para isso duplicaria informação que `updated_at` já carrega no
+   * caminho comum (nenhum item muda de status duas vezes na mesma janela de
+   * consulta de um ritual diário).
+   */
+  listByStatusUpdatedBetween(status: ItemStatus, sinceIso: string, untilIso: string): ItemRecord[] {
+    return this.db
+      .prepare<
+        [string, string, string],
+        ItemRow
+      >('SELECT * FROM items WHERE status = ? AND updated_at >= ? AND updated_at < ? ORDER BY updated_at ASC')
+      .all(status, sinceIso, untilIso)
+      .map(toRecord);
+  }
+
   /** Último item citado na conversa (RF-07: respostas numéricas referem-se a ele) — mais recente por criação, não por atualização. */
   findMostRecentActive(): ItemRecord | undefined {
     const row = this.db
