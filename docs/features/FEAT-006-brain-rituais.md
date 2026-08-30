@@ -1,0 +1,129 @@
+# FEAT-006 — Brain Sonnet, briefing matinal e revisão noturna
+
+**Status:** rascunho · **Issue:** #16 · **Branch:** `feature/FEAT-006-brain-rituais` · **Data:** 2026-08-30
+
+## Contexto e objetivo
+
+Até a FEAT-005, o Norte sabe capturar (Haiku, FEAT-002), gerar cadeias de lembrete (FEAT-004) e ler/escrever no Google Calendar pelo caminho determinístico (FEAT-005). O que ainda não existe é o próprio "cérebro" do produto: quando a triagem classifica uma mensagem como `conversa` — não é captura nem comando —, o Norte hoje responde com uma frase fixa e honesta ("ainda não sei fazer isso"), nunca aciona o Sonnet. Essa feature liga o Sonnet 5 de verdade, com tool use, e entrega os dois rituais que dependem dele: briefing matinal (RF-05) e revisão noturna (RF-06).
+
+É a maior feature do M1 porque três coisas nascem juntas e nenhuma faz sentido isolada: o **loop de tool-use manual** da Messages API (ADR-001), que faltava desde a fundação; o **prompt caching byte-estável** (ADR-007), que só se justifica quando existe um system prompt grande o bastante (fragmentos de módulo + regras de tom) para valer a pena cachear; e os **rituais com fallback determinístico** (ADR-006), que são a prova de que o LLM nunca é ponto único de falha do valor diário. A tool `create_event` que o ADR-019 reservou para esta feature entra aqui como o primeiro consumidor real do loop de tool-use.
+
+Atende RF-05 (briefing), RF-06 (revisão noturna) e RF-14 (tom RSD-safe, transversal — aqui testado pela primeira vez contra saída de modelo real, não só contra templates estáticos). RF-09 ("qual a próxima?") fica fora — decisão registrada abaixo.
+
+## Escopo
+
+1. **Loop de tool-use manual do brain (`core/llm`, ADR-001):**
+   - Quando a triagem classifica `conversa`, o dispatcher de captura passa a chamar o brain em vez de responder com a frase fixa atual.
+   - Loop: monta mensagem do usuário + histórico recente → chama Sonnet 5 com o registry de tools disponível → se a resposta contém `tool_use`, valida o input com o `inputSchema` (zod, `.strict()`) de cada tool do registry, executa o `handler` correspondente, devolve o resultado como `tool_result` numa nova chamada → repete até a resposta ser só texto (sem `tool_use`) → texto final vai para o outbox.
+   - Tool inválida (nome que não existe no registry, ou input que falha a validação zod) nunca chega a um `handler` — vira `tool_result` de erro devolvido ao próprio modelo (mensagem curta, sem detalhe interno), permitindo ao modelo tentar de novo ou desistir e responder em texto; nenhuma exceção de validação escapa para o usuário como erro cru.
+   - Teto de iterações do loop (proteção contra o modelo entrar em ciclo de tool calls): loop interrompido volta uma resposta padrão de "não consegui terminar agora" — nunca trava a requisição indefinidamente.
+   - Tools disponíveis ao brain nesta entrega: as cinco de `modules/tasks` já existentes (`create_item`, `complete_item`, `snooze_item`, `drop_item`, `list_items`) e a nova `create_event` (item 2 abaixo). Toda escrita, inclusive a do Calendar, continua passando pelos serviços validados — o brain nunca grava em SQLite nem chama a API do Google diretamente, só invoca a tool.
+
+2. **Tool `create_event` (ADR-019, ADR-014):**
+   - `ToolDefinition` nova no manifesto de `modules/integrations/google-calendar`: schema strict (`título`, `startAt` ISO, `endAt` ISO opcional — default de 1h de duração, mesmo padrão do `DEFAULT_EVENT_DURATION_MS` da captura determinística —, `local` opcional).
+   - `handler` chama `GoogleCalendarService.createRemoteEvent` (contrato já público desde a FEAT-005) e, na mesma operação, cria o `event`/`item` internos + cadeia (reusa `EventService`/`ChainService`, mesma sequência que `syncEvent` já faz) — o brain nunca cria evento remoto sem o espelho interno.
+   - Resolução de data/hora relativa ("sexta 10h") acontece **antes** da tool ser chamada: o brain recebe a data/hora já como ISO absoluto — a responsabilidade de "que dia é sexta" é código (parser determinístico já existente em `modules/tasks/domain/date-parsing.ts`), nunca o modelo calculando data sozinho (mesma regra do ADR-006/nota da FEAT-002 sobre o Haiku). Na prática: o system prompt injeta a data/hora atual na última mensagem do usuário (item 3), e o brain formula `startAt` a partir dela; o backend não confia cegamente nisso — data fora de um intervalo sensato (passado distante, ano absurd) é rejeitada pelo schema/serviço e o erro volta como `tool_result` para o modelo tentar de novo.
+   - Falha de escrita no Google (token ausente, refresh falho, erro de rede) propaga como `tool_result` de erro — o brain formula a resposta ao usuário a partir disso (ex.: "não consegui marcar no Calendar agora, mas anotei"), nunca falha silenciosa.
+
+3. **Prompt caching byte-estável (ADR-007):**
+   - `core/llm` monta o system prompt concatenando, em ordem determinística por nome de módulo (ARCHITECTURE.md §2), os `promptFragment()` de cada módulo ativo + um bloco fixo de regras de tom RSD-safe hard-coded no core (não um `promptFragment` de módulo — é regra do produto, não de nenhuma capacidade específica).
+   - Data/hora corrente (`America/Sao_Paulo`) é injetada **só na última mensagem do usuário**, nunca no system prompt — é a única parte que muda a cada chamada.
+   - Bloco de `cache_control` (`type: 'ephemeral'`) no fim do system prompt, marcando o prefixo estável como cacheável.
+   - Verificável: teste unit monta o system prompt duas vezes com o mesmo conjunto de módulos (sem alterar a hora) e compara a sequência de bytes — tem que ser idêntica; monta de novo mudando só a hora corrente e confirma que só a última mensagem do usuário mudou, nunca o system prompt.
+   - Verificável com stub: duas chamadas sucessivas do brain (mesmo dia) usando um stub Anthropic que devolve `cache_read_input_tokens > 0` na segunda chamada — o teste falha se o stub não vir configurado com esse contrato ou se a lógica de montagem quebrar a estabilidade byte a byte entre as duas chamadas (nesta entrega o número real de cache hit em produção só é observável com API real; o teste garante a pré-condição estrutural, não o comportamento do servidor da Anthropic).
+
+4. **Janela de conversa (histórico recente):**
+   - Turnos recentes da tabela `messages` (já existente desde a FEAT-001) entram como mensagens de contexto na chamada ao Sonnet, na ordem cronológica, antes da mensagem atual do usuário.
+   - Limite fixo de turnos (constante de configuração, não settings — não há necessidade de ajuste em runtime nesta entrega) evita que o histórico cresça sem limite; ao ultrapassar o limite, os turnos mais antigos da janela são descartados (sem resumo/consolidação — isso é `modules/memory`, M2, fora de escopo).
+   - Histórico de tool calls de uma conversa anterior não é reconstituído como `tool_use`/`tool_result` na janela — só o texto final de cada turno (pergunta do usuário, resposta final do brain) entra no histórico. Simplificação deliberada: reconstituir blocks de tool use antigos exigiria persistir a estrutura completa da conversa (não só o texto), o que é escopo de `modules/memory` (M2).
+
+5. **Briefing matinal (RF-05):**
+   - Job diário (tipo `briefing` na tabela `jobs`, horário default 7h40 em settings, ajustável) que roda pelo scheduler existente (poll 30s, catch-up no boot).
+   - `rituals/domain` (função pura, sem I/O) monta os dados: agenda do dia (via `GoogleCalendarService.listTodayAndSync`), no máximo 3 prioridades (via `ItemService`/critério de prioridade+prazo já existente no domínio de `tasks`) e o primeiro micropasso da prioridade 1 — nesta entrega, o micropasso é heurística de código (ex.: primeiro verbo de ação do título, ou "abrir/começar" genérico quando o título não sugere um passo óbvio), não geração por LLM (RF-17/micropassos reativos ricos é M2).
+   - Com os dados prontos, o Sonnet **redige** o texto final (formulação variada, pergunta acionável do tipo "qual você encara primeiro?"), sem tool use nesta chamada — é só redação sobre dados já coletados, não conversa com ferramentas.
+   - Nunca exibe o backlog completo — só os dados coletados acima entram no prompt de redação; o Sonnet não tem acesso a `list_items` irrestrito nesta chamada.
+   - **Fallback determinístico:** se a chamada ao Sonnet falhar (erro de API) ou estourar timeout, um template fixo monta a mesma informação (agenda + 3 prioridades + micropasso + pergunta fixa "qual você encara primeiro?") sem LLM. O briefing sai de um jeito ou de outro — nunca deixa de chegar.
+   - Job durável: linha em `jobs`, `next_run_at` calculado a partir do horário em settings, catch-up no boot cobre o caso de o processo estar fora do ar no horário programado.
+
+6. **Revisão noturna (RF-06):**
+   - Job diário (tipo `revisao`, horário default 21h30 em settings) com o mesmo esqueleto do briefing: `rituals/domain` monta os dados (o que fechou hoje — reconhecimento; o que ficou para amanhã — reagendado automaticamente pelo domínio existente, sem culpa; no máximo UMA decisão pedida ao usuário, escolhida por critério determinístico simples — ex.: item mais antigo elegível a decisão), Sonnet redige, fallback template se falhar.
+   - Máximo de 3 mensagens (limite imposto no código que monta o envio, não só sugerido no prompt), todas respondíveis por número.
+   - Job durável, mesmo padrão de catch-up do briefing.
+
+7. **Tom RSD-safe nas saídas do brain e dos rituais (RF-14):**
+   - Bloco de regras hard-coded no system prompt (item 3): proibido citar histórico de falhas/contagem de adiamentos, proibido tom de fiscal ("você não fez de novo"), proibido tom de animador de torcida artificial; toda cobrança futura (`nudges`, FEAT-007) já nasce com a regra no prompt, mesmo não sendo usada ainda por este módulo.
+   - `tests/tone/` ganha casos cobrindo as saídas desta feature: com um stub determinístico do Sonnet que devolve texto contendo um dos padrões proibidos (ex.: menção a "de novo", "3ª vez", tom de crítica), o teste comprova que a camada correspondente barra — explicitando o que é testável deterministicamente:
+     - **Testável por código, sem depender do modelo:** o system prompt contém as regras (asserção de string/estrutura); o payload que os rituais montam nunca inclui `snoozeCount`/contagem de falhas (mesma garantia estrutural da FEAT-002, agora estendida ao prompt de redação dos rituais); o fallback template (100% determinístico) passa pela suite de tom como qualquer template anterior.
+     - **Não determinístico, depende do modelo:** o texto que o Sonnet de fato gera em produção pode, em tese, ainda soar mal mesmo com as regras no prompt — isso não é testável em CI sem chamar a API real. Mitigação registrada aqui, não simulada: validação manual (checklist abaixo) e monitoramento contínuo em uso real: qualquer saída do brain que soar crítica em produção é bug (regra do CLAUDE.md), reportado e viraria caso adversarial novo na suite.
+
+8. **Custo (base do RF-15, sem alarme novo nesta entrega):**
+   - Toda chamada ao brain (loop de tool-use, redação de briefing, redação de revisão) registra `tokens_in`/`tokens_out`/`cache_read_tokens` na tabela `messages`, reusando o mecanismo já existente desde a FEAT-002 — só passa a ser exercitado por um volume maior de chamadas (cada turno de conversa pode gerar N chamadas ao Sonnet por causa do loop de tool-use).
+
+## Fora de escopo
+
+- **RF-09 "qual a próxima?"** — decisão registrada abaixo: fica coeso na FEAT-007, junto com fechamento de loop/modo retorno/higiene. O brain desta feature não implementa esse comando; a única garantia desta entrega é que a triagem/dispatcher não confundem "qual a próxima?" com `conversa` genérica de um jeito que crie conflito quando a FEAT-007 chegar (o comando cai em `conversa` por ora e recebe resposta do Sonnet como qualquer outra pergunta — comportamento aceitável até a FEAT-007 dar a ele um caminho determinístico próprio).
+- Cobranças/fechamento de loop, modo retorno, higiene automática (RF-08, RF-10, RF-11) — `modules/nudges`, `return-mode`, `hygiene`, todos FEAT-007.
+- Memória de longo prazo, `facts`, consolidação noturna via Batch API (RF-19) — `modules/memory`, M2. Nesta entrega a "memória" do brain é só a janela de conversa recente (item 4); nada é consolidado, nada tem `confidence`.
+- Gmail no briefing (RF-22) — M2.
+- Micropassos reativos avançados, "só 5 minutos", if-then contextualizado (RF-17, RF-18) — M2; o briefing já traz o primeiro micropasso por heurística simples de código (item 5), não pela capacidade reativa completa.
+- `suggest_time` (sugestão de horário livre) — não faz parte da tool `create_event` desta entrega, como já registrado na FEAT-005; o usuário precisa dizer um horário.
+- Retrospectiva mensal (RF-27) — M3, `rituals/domain` recebe a função de briefing/revisão aqui, mas a terceira função do módulo (retrospectiva) fica para lá.
+- Streaming de resposta do Sonnet — o loop de tool-use processa a resposta completa de cada chamada, sem streaming; não há requisito de latência que justifique a complexidade adicional nesta entrega.
+- Multi-turno com tool use reconstituído do histórico (item 4) — simplificação já registrada acima.
+
+## Decisões tomadas
+
+| Decisão | Alternativas consideradas | Por quê |
+|---|---|---|
+| RF-09 fica na FEAT-007, não nesta entrega | (a) Implementar "qual a próxima?" aqui, já que o brain está sendo ligado; (b) implementar como tool nova do brain | RF-09 é parte de um conjunto coeso com fechamento de loop, modo retorno e higiene (todos sobre "qual item merece atenção agora" e "como o sistema se comporta diante de silêncio/backlog") — a issue #17 já reúne esse escopo. Implementar aqui fragmentaria a decisão de seleção de próxima ação entre duas specs; o risco de conflito é mitigado porque a pergunta cai em `conversa` genérica até a FEAT-007 lhe dar um caminho determinístico |
+| Micropasso do briefing é heurística de código, não geração por LLM dentro do próprio job de coleta de dados | Pedir ao Sonnet para sugerir o micropasso como parte da mesma chamada de redação | RF-17 (quebra em micropassos "de verdade", reativa e negociada) é M2; gerar micropasso rico aqui adiantaria escopo de outra feature sem o resto do contexto que RF-17 propõe (conversa, negociação). Uma heurística simples e determinística basta para cumprir "o briefing já inclui o primeiro micropasso da prioridade 1 desde o M1" (PRD RF-17) sem abrir a capacidade completa agora |
+| Histórico de tool use não é reconstituído na janela de conversa — só texto final de cada turno | Persistir e reinjetar os blocks completos (`tool_use`/`tool_result`) de turnos anteriores | Reconstituir a conversa completa como a Anthropic exige (blocks emparelhados corretamente) é objetivamente mais complexo e não muda o comportamento observável nesta entrega (o resultado de uma tool já está refletido no task-store — o brain pode simplesmente chamar `list_items` de novo se precisar do estado atual); virar dívida explícita, não silenciosa |
+| Teto de iterações do loop de tool-use é constante de código, não settings | Parâmetro configurável em settings, ajustável pelo dono | É proteção de engenharia contra loop infinito, não um parâmetro de produto que o dono precise calibrar por uso — mesma lógica de outras constantes técnicas do projeto (ex. `EXPIRY_SAFETY_MARGIN_MS` na FEAT-005) |
+| Bloco de regras de tom RSD-safe vive hard-coded no `core/llm`, não como `promptFragment` de um módulo | Módulo `rituals` ou módulo novo `tone` contribuindo o bloco via manifesto | RF-14 é transversal a todo o produto (não é comportamento de um módulo específico) — encaixá-lo como fragmento de um módulo arbitrário criaria a falsa impressão de que outro módulo poderia existir sem essas regras. Fica no core, sempre presente, independente de quais módulos estão ativos na fase |
+
+(Nenhuma decisão nova de arquitetura de impacto duradouro — o loop de tool-use manual já está fixado no ADR-001, o caminho crítico sem LLM no ADR-006, a estratégia de modelos e caching no ADR-007, e a divisão de escrita no Calendar entre caminho determinístico e tool do brain no ADR-019. Esta feature apenas instancia essas decisões em código.)
+
+## Impacto técnico
+
+- **Banco:** nenhuma tabela nova. `jobs` ganha dois novos valores de `tipo` (`briefing`, `revisao`) dentro do `CHECK` já existente (migração em `core` ou no módulo `rituals`, a decidir na implementação por onde o tipo é declarado); `messages` passa a registrar volume maior de chamadas (sem mudança de schema). Módulo novo `modules/rituals` nasce com manifesto próprio (jobs handlers, `promptFragment` se necessário, sem tools/commands/migrations de dado próprio nesta entrega).
+- **API:** nenhuma rota HTTP nova — o brain é acionado internamente pelo dispatcher de captura (mensagem `conversa`) e pelo scheduler (jobs de briefing/revisão); superfície pública continua `POST /webhook/evolution` e as rotas de setup do Google (FEAT-005).
+- **Frontend:** nenhum — interface 100% WhatsApp.
+- **Permissões:** sistema single-user; sem mudança no controle de acesso.
+- **Áreas sensíveis tocadas** (gatilho de `security-auditor` obrigatório no review): system prompt de tom RSD-safe (área explicitamente sensível por definição do briefing desta tarefa — mensagem que soa crítica é bug de produto, não só de qualidade); tool `create_event` como novo caminho de escrita externa (Google Calendar) decidido por um LLM em vez de código determinístico — validar que o schema strict e a validação zod realmente impedem o modelo de forçar um evento fora de parâmetros sensatos (data absurda, duração negativa); loop de tool-use como superfície nova de execução de código a partir de decisão do modelo — validar que nenhuma tool fora do registry explícito é alcançável e que erro de validação nunca vaza detalhe interno (stack trace, nomes de tabela) na resposta ao usuário.
+
+## Testes
+
+| Tipo | O que cobre |
+|---|---|
+| Unit — loop de tool-use | Modelo pede uma tool válida → handler executa → resultado volta como `tool_result` → modelo responde em texto (sequência completa, stub Anthropic determinístico); modelo pede tool inexistente no registry → erro estruturado devolvido ao modelo, nunca exceção crua; input de tool que falha o `inputSchema.parse` → mesmo comportamento (erro devolvido ao modelo, handler nunca chamado); múltiplas tools em sequência num mesmo turno (ex. `list_items` seguido de `create_event`) resolvidas uma a uma; teto de iterações do loop atingido → resposta padrão de fallback, sem travar. |
+| Unit — montagem do system prompt (byte-estável) | Mesma sequência de módulos ativos + mesma hora → duas montagens produzem bytes idênticos; mudar só a hora corrente → system prompt idêntico, só a última mensagem do usuário muda; ordem dos fragmentos é determinística por nome de módulo, independente da ordem de registro em runtime; bloco de regras de tom está presente e é idêntico entre montagens. |
+| Unit — `rituals/domain` (briefing e revisão) | Seleção de até 3 prioridades a partir de um conjunto maior de itens (critério de prazo/prioridade já existente); micropasso heurístico gerado para a prioridade 1; nunca inclui `snoozeCount`/contagem de adiamentos no payload montado para redação; revisão seleciona no máximo UMA decisão a pedir; template de fallback do briefing e da revisão produzem os mesmos dados de entrada em formato determinístico (sem LLM). |
+| Unit — tool `create_event` | Input válido (ISO absoluto) cria evento remoto (stub Google) + `event`/`item` interno + cadeia numa única operação; `endAt` ausente aplica duração default de 1h; data fora de intervalo sensato rejeitada antes de chamar o Google; falha do `GoogleCalendarService` (token ausente, refresh falho) propaga como erro de tool, nunca falha silenciosa. |
+| Integração — conversa → brain → `create_event` | Stub do Sonnet decide chamar `create_event` a partir de uma mensagem de `conversa` ("marca reunião sexta 10h") + stub do Google: evento é criado no stub remoto e no task-store interno (item + event + cadeia), resposta final do brain confirma em texto; mesma chamada repetida (idempotência, reentrega) não duplica. |
+| Integração — briefing | Job `briefing` vence → dados coletados (agenda stub + prioridades reais do task-store) → Sonnet stub redige → mensagem enviada ao outbox com os dados corretos; **falha injetada:** Sonnet stub retorna erro/timeout → template de fallback monta e envia os mesmos dados (mesma agenda, mesmas 3 prioridades, mesmo micropasso) — o briefing chega de um jeito ou de outro, teste falha se nenhuma mensagem sair. |
+| Integração — revisão noturna | Job `revisao` vence → dados coletados (fechados hoje, reagendados para amanhã, 1 decisão pedida) → Sonnet stub redige em no máximo 3 mensagens; falha injetada → template de fallback com os mesmos dados. |
+| Integração — catch-up no boot | Jobs `briefing`/`revisao` com `next_run_at` vencido antes da subida do processo disparam no boot (mesmo padrão de catch-up já testado para `reminder`, FEAT-001/002). |
+| Custo | Chamada real (stubada) do brain — tanto no loop de tool-use quanto na redação dos rituais — grava `tokens_in`/`tokens_out`/`cache_read_tokens` em `messages`; duas chamadas sucessivas no mesmo "dia" simulado (mesmo system prompt) resultam em `cache_read_input_tokens > 0` na segunda, conforme o contrato do stub (ver item 3 do Escopo sobre o que é verificável em CI vs. em produção). |
+| Suite de TOM (`tests/tone/`) | Casos adversariais cobrindo as saídas do brain e dos rituais: stub do Sonnet devolvendo texto com padrão proibido (menção a histórico de falhas, tom de fiscal, tom de animador de torcida forçado) é usado para provar que a camada de guarda pretendida (ver limite testável vs. não-testável no Escopo, item 7) realmente barra o que é barrável por código; templates de fallback do briefing/revisão passam pelos mesmos padrões proibidos do TESTING.md §4.1; teste dedicado garante que o payload de dados do briefing/revisão nunca contém `snoozeCount`/adiamentos, mesmo antes de chegar à redação. |
+| Segurança/isolamento | Suite S (TESTING.md §3) estendida: erro de validação de tool nunca vaza detalhe interno (nome de tabela, stack trace) na resposta ao usuário; tool `create_event` só é alcançável via o registry declarado, nenhuma tool "escondida" é exposta ao brain; log do loop de tool-use nunca grava o corpo completo de uma chamada que contenha dado sensível além do necessário (mesmo padrão da FEAT-002/005). |
+
+## Como validar manualmente
+
+Com `ANTHROPIC_API_KEY` e as credenciais do Google (FEAT-005) reais preenchidas:
+
+1. Enviar "e aí, o que você acha que eu devia priorizar hoje?": a triagem classifica como `conversa`, o brain responde de verdade usando as tarefas reais do task-store (não uma frase fixa) — a resposta reflete itens que existem de fato na lista.
+2. Enviar "marca reunião sexta 10h" em conversa (não captura direta): o brain chama a tool `create_event`; o evento aparece no Google Calendar do dono e a cadeia de lembretes é gerada, mesma verificação da FEAT-005.
+3. Ajustar o horário do briefing em settings para poucos minutos à frente (ou esperar 7h40): a mensagem chega com agenda do dia, no máximo 3 prioridades, o micropasso da primeira e uma pergunta acionável — nunca a lista completa de itens.
+4. Derrubar temporariamente `ANTHROPIC_API_KEY` (valor inválido) e forçar o horário do briefing: a mensagem ainda chega, agora pelo template de fallback, com os mesmos dados (agenda + prioridades + micropasso), só com redação fixa em vez de variada.
+5. Repetir os passos 3–4 para a revisão noturna (21h30 ou horário ajustado): mensagem de reconhecimento do que fechou, o que foi para amanhã e no máximo uma decisão pedida, em até 3 mensagens; com a API derrubada, o mesmo conteúdo chega por template.
+6. Conversar por várias mensagens seguidas e conferir (via log ou inspeção de `messages`) que o histórico recente influencia a resposta do brain (ex. perguntar algo que só faz sentido lembrando o que foi dito 2 mensagens atrás) sem o histórico crescer sem limite.
+
+---
+
+## Entrega (preencher no fim, antes do merge)
+
+- **O que foi feito:** (preencher)
+- **PRs:** (preencher)
+- **Migrações:** (preencher)
+- **Pendências/débitos:** (preencher)
+- **Aprendizados:** (preencher)
