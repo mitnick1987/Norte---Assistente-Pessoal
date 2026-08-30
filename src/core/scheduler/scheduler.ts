@@ -1,7 +1,7 @@
 import type { Logger } from 'pino';
 import type { JobHandler } from '../kernel/types.js';
-import { selectDueJobs, nextOccurrence, type DueJobCandidate, type RecurrenceRule } from './domain/index.js';
-import type { JobRepository, JobRow } from './job-repository.js';
+import { selectDueJobs, nextOccurrence, type DueJobCandidate } from './domain/index.js';
+import { parseRecurrence, type JobRepository, type JobRow } from './job-repository.js';
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -67,8 +67,9 @@ export class Scheduler {
     try {
       await handler({ jobId, payload: JSON.parse(row.payload) });
 
-      if (row.recurrence) {
-        const next = nextOccurrence(this.now(), row.recurrence as RecurrenceRule);
+      const recurrence = parseRecurrence(row.recurrence);
+      if (recurrence) {
+        const next = nextOccurrence(this.now(), recurrence);
         this.deps.repository.rescheduleRecurring(jobId, next);
       }
     } catch (err) {

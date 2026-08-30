@@ -48,6 +48,14 @@ export interface WebhookRouteDeps {
   readonly onUnmatchedText?: UnmatchedTextHandler;
   /** Ausente = áudio não tem processamento (comportamento pré-FEAT-003: só registra e marca `processed`). */
   readonly onAudioMessage?: AudioMessageHandler;
+  /**
+   * Ponto de extensão para o modo retorno (RF-10, FEAT-007): chamado para
+   * toda mensagem de entrada nova (texto ou áudio, dedup já resolvido),
+   * antes do processamento normal — decide se é a reativação e, se for,
+   * enfileira o resumo de reentrada. Ausente só em teste que não exercita o
+   * modo retorno; nunca bloqueia o 2xx nem o processamento principal.
+   */
+  readonly onInboundRecorded?: (jid: string, messageId: number) => void;
 }
 
 export interface ProcessInboundDeps {
@@ -193,6 +201,15 @@ export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: Webhoo
     if (!recorded.isNew) {
       deps.logger.info({ waMessageId: incoming.waMessageId }, 'webhook ignorado: mensagem duplicada (dedup)');
       return reply.code(200).send({ deduped: true });
+    }
+
+    // Síncrono e best-effort de propósito: só decide se enfileira o resumo
+    // de reentrada (RF-10), nunca deveria derrubar o processamento principal
+    // da mensagem por uma falha aqui.
+    try {
+      deps.onInboundRecorded?.(incoming.jid, recorded.messageId);
+    } catch (err) {
+      deps.logger.error({ err, messageId: recorded.messageId }, 'falha ao avaliar modo retorno na mensagem recebida');
     }
 
     if (incoming.kind === 'text' && incoming.text) {

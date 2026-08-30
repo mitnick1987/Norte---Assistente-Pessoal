@@ -3,6 +3,7 @@ import type { LlmProvider, LlmUsage } from '../../core/llm/index.js';
 import { LlmRequestError } from '../../core/llm/index.js';
 import { startOfZonedDay, zonedTimeToUtc } from '../../core/scheduler/domain/timezone.js';
 import type { ItemService } from '../tasks/public/index.js';
+import type { HygieneService } from '../hygiene/public/index.js';
 import { buildReviewData, buildReviewFallbackMessages, REVIEW_MAX_MESSAGES, type ReviewData } from './domain/index.js';
 
 const REVIEW_MODEL = 'claude-sonnet-5';
@@ -14,6 +15,8 @@ export interface ReviewServiceDeps {
   readonly systemPrompt: () => string;
   readonly logger: Logger;
   readonly onUsage?: (usage: LlmUsage) => void;
+  /** Ausente só em teste que não exercita a proposta de higiene — em produção sempre presente (RF-11, FEAT-007). */
+  readonly hygieneService?: HygieneService;
   now?: () => Date;
 }
 
@@ -90,7 +93,13 @@ export class ReviewService {
       .list({ includeInbox: false })
       .filter((item) => item.dueAt && new Date(item.dueAt) < now);
 
-    return buildReviewData(completedToday, rescheduledToTomorrow, eligibleForDecision);
+    // Higiene (RF-11) é sempre calculada e, se houver candidato, substitui a
+    // pergunta genérica — a mensagem já vem pronta de `hygiene/public` porque
+    // a régua de tom da proposta pertence àquele módulo, não a este.
+    const hygieneProposal = this.deps.hygieneService?.findProposal();
+    const hygieneMessage = hygieneProposal ? this.deps.hygieneService!.buildMessage(hygieneProposal) : undefined;
+
+    return buildReviewData(completedToday, rescheduledToTomorrow, eligibleForDecision, hygieneMessage);
   }
 }
 
@@ -101,7 +110,14 @@ function buildDraftingPrompt(data: ReviewData): string {
     data.rescheduledToTomorrow.length > 0
       ? data.rescheduledToTomorrow.map((e) => `- ${e.title}`).join('\n')
       : '(nada reagendado para amanhã)';
-  const decisionText = data.decisionRequested ? `"${data.decisionRequested.title}"` : '(nenhuma decisão pendente)';
+
+  // Higiene substitui a decisão genérica no prompt de redação também — o
+  // Sonnet nunca vê as duas ao mesmo tempo (mesma regra do fallback).
+  const decisionSection = data.hygieneMessage
+    ? `No máximo uma decisão a pedir ao usuário: reescreva esta proposta de higiene com suas próprias palavras, mantendo o sentido e as 3 opções numeradas exatamente como estão: "${data.hygieneMessage}"`
+    : data.decisionRequested
+      ? `No máximo uma decisão a pedir ao usuário sobre: "${data.decisionRequested.title}"\nPergunte objetivamente o que ele quer fazer, oferecendo manter, adiar ou dropar.`
+      : 'No máximo uma decisão a pedir ao usuário sobre: (nenhuma decisão pendente)';
 
   return `Redija a revisão noturna de hoje a partir destes dados (não invente nada além do que está aqui):
 
@@ -111,8 +127,7 @@ ${completedText}
 O que ficou para amanhã (já reagendado automaticamente, sem culpa):
 ${rescheduledText}
 
-No máximo uma decisão a pedir ao usuário sobre: ${decisionText}
-${data.decisionRequested ? 'Pergunte objetivamente o que ele quer fazer, oferecendo manter, adiar ou dropar.' : ''}
+${decisionSection}
 
 Escreva no máximo ${REVIEW_MAX_MESSAGES} parágrafos curtos, separados por linha em branco — cada parágrafo vira uma mensagem separada. Nunca cite quantas vezes algo já aconteceu antes. Responda só com o texto final, sem preâmbulo.`;
 }

@@ -19,6 +19,33 @@ export interface CreateJobInput {
   recurrence?: RecurrenceRule;
 }
 
+/**
+ * `recurrence` é sempre serializado como TEXT: regra simples (`'daily'`) vira
+ * a própria string, regra composta (`{ kind: 'every', minutes }`, FEAT-007)
+ * vira JSON — o SQLite (better-sqlite3) não aceita bind de objeto cru, e a
+ * leitura (`parseRecurrence`) faz o caminho inverso antes de repassar ao
+ * cálculo de próxima ocorrência.
+ */
+function serializeRecurrence(recurrence: RecurrenceRule | undefined): string | null {
+  if (recurrence === undefined) return null;
+  return typeof recurrence === 'string' ? recurrence : JSON.stringify(recurrence);
+}
+
+export function parseRecurrence(value: string | null): RecurrenceRule | undefined {
+  if (!value) return undefined;
+  if (value === 'daily' || value === 'weekly' || value === 'monthly') return value;
+
+  try {
+    const parsed = JSON.parse(value) as Partial<{ kind: string; minutes: number }>;
+    if (parsed.kind === 'every' && typeof parsed.minutes === 'number') {
+      return { kind: 'every', minutes: parsed.minutes };
+    }
+  } catch {
+    // cai no undefined abaixo — payload de recorrência corrompido nunca derruba o job, só para de recorrer.
+  }
+  return undefined;
+}
+
 /** Toda leitura/escrita de `jobs` passa por aqui — nenhum módulo faz SQL direto na tabela. */
 export class JobRepository {
   constructor(private readonly db: Database) {}
@@ -29,7 +56,7 @@ export class JobRepository {
         `INSERT INTO jobs (type, payload, next_run_at, recurrence, status, attempts)
          VALUES (?, ?, ?, ?, 'pending', 0)`,
       )
-      .run(input.type, JSON.stringify(input.payload ?? {}), input.nextRunAt.toISOString(), input.recurrence ?? null);
+      .run(input.type, JSON.stringify(input.payload ?? {}), input.nextRunAt.toISOString(), serializeRecurrence(input.recurrence));
     return Number(result.lastInsertRowid);
   }
 

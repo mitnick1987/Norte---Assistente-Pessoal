@@ -53,6 +53,33 @@ describe('catch-up de job vencido no boot (ADR-004)', () => {
     expect(outboxRow?.body).toBe('Lembrete: pagar boleto');
   });
 
+  it('job cobranca (FEAT-007, RF-08) com next_run_at vencido sobrevive a restart e dispara no catch-up do boot', async () => {
+    const env = buildTestEnv();
+    firstApp = buildAppOnSameDb(env);
+    await firstApp.start();
+
+    // item com prazo vencido, elegível para cobrança assim que o job rodar.
+    firstApp.db
+      .prepare(`INSERT INTO items (type, title, origin, status, due_at) VALUES ('tarefa', 'pagar boleto', 'texto', 'ativa', ?)`)
+      .run(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+
+    // job cobranca já semeado no boot (mesmo padrão de briefing/revisao) —
+    // força o vencimento para simular o downtime, sem esperar a cadência normal.
+    const overdueAt = new Date(Date.now() - 60_000).toISOString();
+    firstApp.db.prepare(`UPDATE jobs SET next_run_at = ? WHERE type = 'cobranca'`).run(overdueAt);
+
+    await firstApp.fastify.close();
+
+    secondApp = buildAppOnSameDb(env);
+    await secondApp.scheduler.runCatchUp();
+
+    const outboxRow = secondApp.db
+      .prepare(`SELECT body FROM outbox_messages WHERE is_proactive = 1 ORDER BY id DESC LIMIT 1`)
+      .get() as { body: string } | undefined;
+    expect(outboxRow?.body).toContain('1) feito');
+    expect(outboxRow?.body).toContain('3) dropar');
+  });
+
   it('não duplica disparo de job que já tinha delivered_at antes do restart', async () => {
     const env = buildTestEnv();
     firstApp = buildAppOnSameDb(env);

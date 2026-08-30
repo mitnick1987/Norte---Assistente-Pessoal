@@ -160,6 +160,38 @@ export class MessageRepository {
   }
 
   /**
+   * Mensagem de entrada mais recente de `jid` (RF-10, modo retorno): usada
+   * para decidir se o supressor de cobranças está ativo agora (silêncio >=
+   * 48h desde a última entrada).
+   */
+  findLastInbound(jid: string): { readonly createdAt: string } | undefined {
+    const row = this.db
+      .prepare<
+        [string],
+        { created_at: string }
+      >(`SELECT created_at FROM messages WHERE jid = ? AND direction = 'in' ORDER BY id DESC LIMIT 1`)
+      .get(jid);
+    return row ? { createdAt: row.created_at } : undefined;
+  }
+
+  /**
+   * Mensagem de entrada imediatamente anterior a `beforeMessageId` (RF-10,
+   * modo retorno): usada para decidir se a mensagem que acabou de chegar é
+   * uma "reativação" — o silêncio é medido contra a penúltima entrada, nunca
+   * contra a que está sendo processada agora. `undefined` quando não há
+   * nenhuma anterior (primeira mensagem de entrada da vida do sistema).
+   */
+  findLastInboundBefore(jid: string, beforeMessageId: number): { readonly createdAt: string } | undefined {
+    const row = this.db
+      .prepare<
+        [string, number],
+        { created_at: string }
+      >(`SELECT created_at FROM messages WHERE jid = ? AND direction = 'in' AND id < ? ORDER BY id DESC LIMIT 1`)
+      .get(jid, beforeMessageId);
+    return row ? { createdAt: row.created_at } : undefined;
+  }
+
+  /**
    * Candidatas à varredura de recuperação no boot (ADR-018): todas as
    * mensagens de entrada ainda `pending`, sem filtro de idade aqui — o corte
    * pelo limiar é feito em JS (mesmo padrão do scheduler, due-jobs.ts) para

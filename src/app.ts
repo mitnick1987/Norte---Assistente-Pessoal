@@ -45,6 +45,17 @@ import {
   REVISAO_HOUR_SETTING,
   REVISAO_MINUTE_SETTING,
 } from './modules/rituals/public/index.js';
+import { buildHygieneModule } from './modules/hygiene/public/index.js';
+import { buildReturnModeModule } from './modules/return-mode/public/index.js';
+import {
+  buildNudgesModule,
+  ensureNudgesJob,
+  NUDGES_DAILY_CHARGE_CAP_SETTING,
+  NUDGES_FALLBACK_SNOOZE_HOUR_SETTING,
+  NUDGES_FALLBACK_SNOOZE_MINUTE_SETTING,
+  NUDGES_CHECK_INTERVAL_MINUTES_SETTING,
+} from './modules/nudges/public/index.js';
+import { buildNextActionModule } from './modules/next-action/public/index.js';
 
 const OUTBOX_INTERVAL_MS = 5_000;
 const PENDING_PROCESSING_POLL_MS = 20;
@@ -220,6 +231,39 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     ...(overrides.now ? { now: overrides.now } : {}),
   });
 
+  // return-mode nasce antes de nudges/rituals: os dois consultam
+  // `returnModeService`/`hygieneService` como dependência, nunca importando
+  // um módulo do outro diretamente (ARCHITECTURE.md §2).
+  const { manifest: returnModeManifest, service: returnModeService } = buildReturnModeModule({
+    messageRepository,
+    itemService,
+    ...(overrides.now ? { now: overrides.now } : {}),
+  });
+
+  const { manifest: hygieneManifest, service: hygieneService } = buildHygieneModule({
+    itemService,
+    ...(overrides.now ? { now: overrides.now } : {}),
+  });
+
+  // `service` não é consumido aqui: o job `cobranca` e os comandos "1/2/3"
+  // já saem prontos no manifesto (mesmo padrão de `chainsManifest`/
+  // `ritualsManifest` — só `chainService` é exceção por ser chamado direto
+  // do fluxo de captura, ver comentário acima).
+  const { manifest: nudgesManifest } = buildNudgesModule({
+    db,
+    itemService,
+    outboxRepository,
+    returnModeService,
+    ownerJid: env.OWNER_WHATSAPP_JID,
+    logger,
+    getDailyChargeCap: () => Number(settings.get<number>(NUDGES_DAILY_CHARGE_CAP_SETTING) ?? 3),
+    getFallbackSnoozeHour: () => Number(settings.get<number>(NUDGES_FALLBACK_SNOOZE_HOUR_SETTING) ?? 9),
+    getFallbackSnoozeMinute: () => Number(settings.get<number>(NUDGES_FALLBACK_SNOOZE_MINUTE_SETTING) ?? 0),
+    ...(overrides.now ? { now: overrides.now } : {}),
+  });
+
+  const { manifest: nextActionManifest } = buildNextActionModule({ itemService });
+
   const ritualsModuleDeps = {
     itemService,
     jobRepository,
@@ -229,6 +273,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     ownerJid: env.OWNER_WHATSAPP_JID,
     logger,
     ...(googleCalendarModule ? { agendaPort: googleCalendarModule.service } : {}),
+    hygieneService,
     onUsage: (usage: LlmUsage, intent: 'briefing' | 'revisao') =>
       messageRepository.recordLlmUsage({
         jid: env.OWNER_WHATSAPP_JID,
@@ -251,6 +296,10 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   registry.register(chainsManifest);
   registry.register(captureManifest);
   registry.register(ritualsManifest);
+  registry.register(returnModeManifest);
+  registry.register(hygieneManifest);
+  registry.register(nudgesManifest);
+  registry.register(nextActionManifest);
   if (googleCalendarModule) registry.register(googleCalendarModule.manifest);
 
   runMigrations(db, [...coreMigrations, ...registry.getMigrations()]);
@@ -296,6 +345,15 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     logger,
     onUnmatchedText: dispatchCapture,
     onAudioMessage: dispatchAudio,
+    // Modo retorno (RF-10, FEAT-007): toda mensagem de entrada nova passa
+    // por aqui antes do processamento normal — decide se é a reativação e
+    // enfileira o resumo de reentrada, sem interferir no fluxo de captura.
+    onInboundRecorded: (jid, messageId) => {
+      const reentryMessage = returnModeService.checkReentry(jid, messageId);
+      if (reentryMessage) {
+        outboxRepository.enqueue({ jid, body: reentryMessage, isProactive: true });
+      }
+    },
   });
 
   registerHealthRoute(fastify, {
@@ -350,6 +408,14 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
       // primeira ocorrência de briefing/revisão — a partir daí o próprio
       // scheduler recalcula a recorrência diária no momento do disparo.
       seedRitualJobs(ritualsModuleDeps, jobRepository);
+
+      // Idem para a checagem de cobrança (RF-08, FEAT-007) — recorrência
+      // `every` (minutos), não `daily`: precisa reavaliar elegibilidade
+      // várias vezes ao dia, não só uma.
+      const checkIntervalMinutes =
+        settings.get<number>(NUDGES_CHECK_INTERVAL_MINUTES_SETTING) ??
+        registry.getSettingsDefaults()[NUDGES_CHECK_INTERVAL_MINUTES_SETTING];
+      ensureNudgesJob(jobRepository, Number(checkIntervalMinutes), overrides.now ? overrides.now() : new Date());
 
       await scheduler.runCatchUp();
       scheduler.start();

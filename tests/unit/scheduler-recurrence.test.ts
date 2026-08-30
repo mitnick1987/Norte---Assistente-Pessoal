@@ -42,4 +42,21 @@ describe('nextOccurrence', () => {
 
     expect(parts).toEqual({ year: 2026, month: 9, day: 1, hour: 7, minute: 40, second: 0 });
   });
+
+  it('recorrência composta "every" (FEAT-007, job cobranca): soma minutos diretamente ao instante do disparo', () => {
+    const fireAt = new Date('2026-08-25T10:40:00.000Z');
+
+    const next = nextOccurrence(fireAt, { kind: 'every', minutes: 60 });
+
+    expect(next.toISOString()).toBe('2026-08-25T11:40:00.000Z');
+  });
+
+  it('recorrência "every" cruzando meia-noite (America/Sao_Paulo) soma minutos em UTC sem depender de fuso', () => {
+    // 2026-08-25 23:50 America/Sao_Paulo == 2026-08-26 02:50 UTC
+    const fireAt = new Date('2026-08-26T02:50:00.000Z');
+
+    const next = nextOccurrence(fireAt, { kind: 'every', minutes: 30 });
+
+    expect(next.toISOString()).toBe('2026-08-26T03:20:00.000Z');
+  });
 });

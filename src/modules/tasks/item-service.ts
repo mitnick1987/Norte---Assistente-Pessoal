@@ -132,7 +132,25 @@ export class ItemService {
     const parsed = parseRelativeDatePtBr(relativeDateText, this.now());
     if (!parsed) return undefined;
 
-    const snoozed = this.repository.snooze(id, parsed.dueAt);
+    return this.applySnooze(id, parsed.dueAt);
+  }
+
+  /**
+   * Mesma transição de `snoozeByText`, mas para quando a data já foi
+   * resolvida por outro caminho determinístico (RF-08: proposta de
+   * reagendamento de `modules/nudges`, calculada a partir de `patterns` ou
+   * do fallback de settings) — sem reparsear um texto formulado só para
+   * exibição ao usuário de volta em `parseRelativeDatePtBr`.
+   */
+  async snoozeToDate(id: number, dueAt: Date): Promise<ItemRecord> {
+    const item = this.getOrThrow(id);
+    assertTransition(item.status, 'adiada');
+
+    return this.applySnooze(id, dueAt);
+  }
+
+  private async applySnooze(id: number, dueAt: Date): Promise<ItemRecord> {
+    const snoozed = this.repository.snooze(id, dueAt);
     await this.emit(ITEM_RESCHEDULED_EVENT, { itemId: id, dueAt: snoozed.dueAt! });
     return snoozed;
   }
