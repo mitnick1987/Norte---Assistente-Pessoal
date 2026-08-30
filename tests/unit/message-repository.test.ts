@@ -98,4 +98,80 @@ describe('MessageRepository', () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ jid: 'jid-1', body: 'b' });
   });
+
+  it('grava mensagem de áudio com media_type e audioRecoveryData (FEAT-003)', () => {
+    const { db, repository } = buildRepository();
+
+    const result = repository.tryRecordInbound({
+      jid: 'jid-1',
+      waMessageId: 'wa-audio-1',
+      body: undefined,
+      mediaType: 'audio',
+      audioRecoveryData: { messageKey: { id: 'wa-audio-1', remoteJid: 'jid-1' }, mimeType: 'audio/ogg' },
+    });
+    const messageId = (result as { messageId: number }).messageId;
+
+    const row = db.prepare('SELECT media_type FROM messages WHERE id = ?').get(messageId) as { media_type: string };
+    expect(row.media_type).toBe('audio');
+
+    const pending = repository.findPendingInbound();
+    expect(pending[0]?.mediaType).toBe('audio');
+    expect(pending[0]?.audioRecoveryData).toEqual({
+      messageKey: { id: 'wa-audio-1', remoteJid: 'jid-1' },
+      mimeType: 'audio/ogg',
+    });
+  });
+
+  it('mensagem de texto não grava audioRecoveryData', () => {
+    const { repository } = buildRepository();
+    repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-1', body: 'oi' });
+
+    const pending = repository.findPendingInbound();
+
+    expect(pending[0]?.mediaType).toBeNull();
+    expect(pending[0]?.audioRecoveryData).toBeUndefined();
+  });
+
+  it('message_key_json corrompido (JSON inválido) não derruba findPendingInbound — trata como dado ausente', () => {
+    const { db, repository } = buildRepository();
+    db.prepare(
+      `INSERT INTO messages (direction, wa_message_id, jid, processing_status, media_type, message_key_json)
+       VALUES ('in', 'wa-audio-corrompido', 'jid-1', 'pending', 'audio', 'isso não é json')`,
+    ).run();
+
+    const pending = repository.findPendingInbound();
+
+    expect(pending[0]?.audioRecoveryData).toBeUndefined();
+  });
+
+  it('message_key_json com formato inesperado (sem mimeType) é tratado como dado ausente', () => {
+    const { db, repository } = buildRepository();
+    db.prepare(
+      `INSERT INTO messages (direction, wa_message_id, jid, processing_status, media_type, message_key_json)
+       VALUES ('in', 'wa-audio-incompleto', 'jid-1', 'pending', 'audio', '{"messageKey":{}}')`,
+    ).run();
+
+    const pending = repository.findPendingInbound();
+
+    expect(pending[0]?.audioRecoveryData).toBeUndefined();
+  });
+
+  it('recordTranscription grava o texto transcrito na coluna transcricao (spec item 2)', () => {
+    const { db, repository } = buildRepository();
+    const result = repository.tryRecordInbound({
+      jid: 'jid-1',
+      waMessageId: 'wa-audio-1',
+      body: undefined,
+      mediaType: 'audio',
+      audioRecoveryData: { messageKey: { id: 'x' }, mimeType: 'audio/ogg' },
+    });
+    const messageId = (result as { messageId: number }).messageId;
+
+    repository.recordTranscription(messageId, 'lembra de comprar ração amanhã');
+
+    const row = db.prepare('SELECT transcricao FROM messages WHERE id = ?').get(messageId) as {
+      transcricao: string;
+    };
+    expect(row.transcricao).toBe('lembra de comprar ração amanhã');
+  });
 });

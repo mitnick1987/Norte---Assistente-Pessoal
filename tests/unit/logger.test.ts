@@ -46,4 +46,26 @@ describe('createLogger', () => {
 
     expect(output()).not.toContain('segredo-de-config-nao-pode-vazar');
   });
+
+  it('redige o header Authorization (Bearer da Groq/OpenAI) mesmo se um dia aparecer em log', () => {
+    const { logger, output } = captureLogger('production');
+
+    logger.warn(
+      { headers: { authorization: 'Bearer chave-groq-nao-pode-vazar' } },
+      'falha ao chamar provedor de STT',
+    );
+
+    expect(output()).not.toContain('chave-groq-nao-pode-vazar');
+  });
+
+  it('redige Authorization em maiúscula (variação de nome de header comum em erro de client HTTP)', () => {
+    const { logger, output } = captureLogger('production');
+
+    logger.warn(
+      { headers: { Authorization: 'Bearer chave-openai-nao-pode-vazar' } },
+      'falha ao chamar provedor de STT',
+    );
+
+    expect(output()).not.toContain('chave-openai-nao-pode-vazar');
+  });
 });

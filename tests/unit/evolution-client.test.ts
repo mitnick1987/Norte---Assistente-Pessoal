@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EvolutionClient } from '../../src/core/channel/whatsapp-evolution/evolution-client.js';
+import { EvolutionClient, MediaUnavailableError } from '../../src/core/channel/whatsapp-evolution/evolution-client.js';
 import { SendFailedError } from '../../src/core/outbox/sender.js';
 import { jsonResponse, stubFetch } from '../factories/fetch-stub.js';
 
@@ -53,10 +53,24 @@ describe('EvolutionClient', () => {
     expect(calls[0]?.url).toBe('http://evolution.test/chat/getBase64FromMediaMessage/norte-test');
   });
 
-  it('getBase64FromMediaMessage lança erro quando a resposta não traz base64', async () => {
+  it('getBase64FromMediaMessage lança MediaUnavailableError quando a resposta não traz base64', async () => {
     stubFetch(() => jsonResponse(200, {}));
     const client = buildClient();
 
-    await expect(client.getBase64FromMediaMessage({ id: 'msg-1' })).rejects.toThrow(/base64/);
+    await expect(client.getBase64FromMediaMessage({ id: 'msg-1' })).rejects.toBeInstanceOf(MediaUnavailableError);
+  });
+
+  it('getBase64FromMediaMessage lança MediaUnavailableError quando a Evolution responde erro HTTP (mídia expirada, FEAT-003)', async () => {
+    stubFetch(() => jsonResponse(404));
+    const client = buildClient();
+
+    await expect(client.getBase64FromMediaMessage({ id: 'msg-1' })).rejects.toBeInstanceOf(MediaUnavailableError);
+  });
+
+  it('getBase64FromMediaMessage lança MediaUnavailableError quando a resposta 2xx não é JSON válido', async () => {
+    stubFetch(() => new Response('não é json', { status: 200, headers: { 'Content-Type': 'text/plain' } }));
+    const client = buildClient();
+
+    await expect(client.getBase64FromMediaMessage({ id: 'msg-1' })).rejects.toBeInstanceOf(MediaUnavailableError);
   });
 });

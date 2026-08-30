@@ -29,6 +29,41 @@ describe('normalizeIncomingMessage', () => {
     expect(normalizeIncomingMessage(event)).toMatchObject({ kind: 'audio', text: undefined });
   });
 
+  it('extrai mimetype, duração e tamanho do audioMessage (FEAT-003)', () => {
+    const event = buildEvent({
+      message: { audioMessage: { mimetype: 'audio/ogg; codecs=opus', seconds: 12, fileLength: '54321' } },
+    });
+
+    expect(normalizeIncomingMessage(event)).toMatchObject({
+      kind: 'audio',
+      audio: { mimeType: 'audio/ogg; codecs=opus', durationSeconds: 12, fileLengthBytes: 54321 },
+    });
+  });
+
+  it('extrai fileLength já numérico (não só string) sem normalizar errado', () => {
+    const event = buildEvent({ message: { audioMessage: { fileLength: 12345 } } });
+
+    expect(normalizeIncomingMessage(event)).toMatchObject({ audio: { fileLengthBytes: 12345 } });
+  });
+
+  it('audioMessage sem mimetype cai no default audio/ogg', () => {
+    const event = buildEvent({ message: { audioMessage: {} } });
+
+    expect(normalizeIncomingMessage(event)).toMatchObject({
+      audio: { mimeType: 'audio/ogg', durationSeconds: undefined, fileLengthBytes: undefined },
+    });
+  });
+
+  it('expõe a key da mensagem para busca ativa de mídia (SECURITY.md §6)', () => {
+    const event = buildEvent({ message: { audioMessage: {} } });
+
+    expect(normalizeIncomingMessage(event).messageKey).toEqual({
+      remoteJid: '5511999999999@s.whatsapp.net',
+      id: 'msg-1',
+      fromMe: false,
+    });
+  });
+
   it('classifica mensagem de imagem mesmo sem texto', () => {
     const event = buildEvent({ message: { imageMessage: {} } });
     expect(normalizeIncomingMessage(event)).toMatchObject({ kind: 'image' });

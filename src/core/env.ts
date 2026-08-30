@@ -37,6 +37,14 @@ const envSchema = z.object({
   // Área sensível (FEAT-002, SECURITY.md): chave de API em texto, nunca em
   // log — redigida no logger (core/logger.ts) mesmo em debug.
   ANTHROPIC_API_KEY: z.string().min(1),
+
+  // Área sensível (FEAT-003, SECURITY.md): nenhuma das duas aparece em log.
+  // Ambas opcionais no boot — GROQ_API_KEY ausente só desativa o primário de
+  // STT (core/stt nem tenta chamá-lo), OPENAI_API_KEY ausente só desativa o
+  // fallback; áudio sem nenhuma das duas configuradas cai direto na falha
+  // total tratada pelo módulo capture (spec item 1, nunca erro de boot).
+  GROQ_API_KEY: z.string().min(1).optional(),
+  OPENAI_API_KEY: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

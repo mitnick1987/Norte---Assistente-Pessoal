@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { CommandMatcher } from '../../kernel/types.js';
 import type { MessageRepository } from '../message-repository.js';
 import type { OutboxRepository } from '../../outbox/index.js';
+import type { IncomingAudio } from '../channel.js';
 import type { ConnectionWatchdog } from './connection-watchdog.js';
 import { evolutionWebhookSchema } from './webhook-schema.js';
 import { isEchoOfOwnMessage, normalizeIncomingMessage } from './normalize.js';
@@ -20,6 +21,20 @@ import { isFromOwner } from './owner-filter.js';
  */
 export type UnmatchedTextHandler = (text: string, jid: string, messageId: number) => Promise<void>;
 
+/**
+ * Ponto de extensão para áudio (FEAT-003): simétrico ao de texto, mas o
+ * core não sabe nada de STT nem de mídia — só entrega a `messageKey` (para
+ * `getBase64FromMediaMessage`) e os metadados já normalizados do payload.
+ * Responsabilidade de busca de mídia + STT + fallback de falha total é
+ * inteira do handler (módulo `capture`, spec item 1/3).
+ */
+export type AudioMessageHandler = (
+  audio: IncomingAudio,
+  messageKey: unknown,
+  jid: string,
+  messageId: number,
+) => Promise<void>;
+
 export interface WebhookRouteDeps {
   readonly webhookSecret: string;
   readonly instance: string;
@@ -31,6 +46,8 @@ export interface WebhookRouteDeps {
   readonly logger: Logger;
   /** Ausente = comportamento da FEAT-001 (silêncio quando nenhum comando bate). */
   readonly onUnmatchedText?: UnmatchedTextHandler;
+  /** Ausente = áudio não tem processamento (comportamento pré-FEAT-003: só registra e marca `processed`). */
+  readonly onAudioMessage?: AudioMessageHandler;
 }
 
 export interface ProcessInboundDeps {
@@ -165,6 +182,12 @@ export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: Webhoo
       jid: incoming.jid,
       waMessageId: incoming.waMessageId,
       body: incoming.text,
+      ...(incoming.kind === 'audio' && incoming.audio
+        ? {
+            mediaType: 'audio' as const,
+            audioRecoveryData: { messageKey: incoming.messageKey, mimeType: incoming.audio.mimeType },
+          }
+        : {}),
     });
 
     if (!recorded.isNew) {
@@ -187,9 +210,24 @@ export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: Webhoo
           deps.messageRepository.markFailed(messageId);
           deps.logger.error({ err, messageId, waMessageId: incoming.waMessageId }, 'falha ao processar mensagem recebida');
         });
+    } else if (incoming.kind === 'audio' && incoming.audio && deps.onAudioMessage) {
+      const messageId = recorded.messageId;
+      const audio = incoming.audio;
+      const messageKey = incoming.messageKey;
+      const jid = incoming.jid;
+
+      // Mesmo espírito do texto (ADR-018): busca de mídia + STT rodam em
+      // background, o 2xx não espera nenhuma das duas.
+      void deps
+        .onAudioMessage(audio, messageKey, jid, messageId)
+        .then(() => deps.messageRepository.markProcessed(messageId))
+        .catch((err: unknown) => {
+          deps.messageRepository.markFailed(messageId);
+          deps.logger.error({ err, messageId, waMessageId: incoming.waMessageId }, 'falha ao processar áudio recebido');
+        });
     } else {
-      // Sem texto (áudio/imagem/outro, fora de escopo desta feature) não há
-      // processamento — a mensagem fica registrada mas não tem próximo passo.
+      // Sem texto nem áudio processável (imagem/outro, fora de escopo) não
+      // há processamento — a mensagem fica registrada mas não tem próximo passo.
       deps.messageRepository.markProcessed(recorded.messageId);
     }
 
