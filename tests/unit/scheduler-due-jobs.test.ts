@@ -33,10 +33,11 @@ describe('isDue', () => {
     expect(isDue(job, now)).toBe(false);
   });
 
-  it('ignora job com status diferente de pending (running/confirmed/failed)', () => {
+  it('ignora job com status diferente de pending (running/confirmed/failed/cancelado)', () => {
     expect(isDue(buildJob({ status: 'running' }), now)).toBe(false);
     expect(isDue(buildJob({ status: 'confirmed' }), now)).toBe(false);
     expect(isDue(buildJob({ status: 'failed' }), now)).toBe(false);
+    expect(isDue(buildJob({ status: 'cancelado' }), now)).toBe(false);
   });
 });
 
@@ -49,5 +50,11 @@ describe('selectDueJobs', () => {
     ];
 
     expect(selectDueJobs(jobs, now).map((j) => j.id)).toEqual([1]);
+  });
+
+  it('job cancelado nunca dispara, mesmo com next_run_at vencido (drop/reagendamento não ressuscita no poll)', () => {
+    const jobs = [buildJob({ id: 1, status: 'cancelado', nextRunAt: new Date('2026-08-20T00:00:00.000Z') })];
+
+    expect(selectDueJobs(jobs, now)).toEqual([]);
   });
 });

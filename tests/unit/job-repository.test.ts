@@ -63,6 +63,15 @@ describe('JobRepository', () => {
     expect(repository.findById(id)?.status).toBe('failed');
   });
 
+  it('markCancelled muda status para cancelado (drop/reagendamento de rotina, nunca failed)', () => {
+    const { repository } = buildRepository();
+    const id = repository.create({ type: 'reminder', nextRunAt: new Date() });
+
+    repository.markCancelled(id);
+
+    expect(repository.findById(id)?.status).toBe('cancelado');
+  });
+
   it('payload é serializado e recuperável como JSON', () => {
     const { repository } = buildRepository();
     const id = repository.create({ type: 'reminder', nextRunAt: new Date(), payload: { itemId: 42 } });

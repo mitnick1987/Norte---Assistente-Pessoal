@@ -49,7 +49,7 @@ export function buildTasksCommands(service: ItemService): CommandMatcher[] {
       if (!target) {
         return { replyText: 'Não achei nenhum item ativo pra dropar.' };
       }
-      service.drop(target.id);
+      await service.drop(target.id);
       return { replyText: 'Dropei. Se mudar de ideia, é só falar.' };
     },
   };
@@ -64,7 +64,7 @@ export function buildTasksCommands(service: ItemService): CommandMatcher[] {
       }
 
       const relativeDateText = normalize(ctx.text).slice(SNOOZE_PREFIX.length).trim();
-      const result = service.snoozeByText(target.id, relativeDateText);
+      const result = await service.snoozeByText(target.id, relativeDateText);
       if (!result) {
         return { replyText: 'Não entendi pra quando adiar — tenta "adia sexta" ou "adia amanhã 14h".' };
       }

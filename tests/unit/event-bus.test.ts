@@ -39,4 +39,47 @@ describe('EventBus', () => {
 
     expect(order).toEqual(['handler', 'depois-do-emit']);
   });
+
+  it('isola falha por assinante: handler que lança não impede os demais de rodar', async () => {
+    const bus = new EventBus<Events>();
+    const handlerOk = vi.fn();
+
+    bus.on('item.created', () => {
+      throw new Error('boom');
+    });
+    bus.on('item.created', handlerOk);
+
+    await expect(bus.emit('item.created', { id: 1 })).resolves.toBeUndefined();
+    expect(handlerOk).toHaveBeenCalledWith({ id: 1 });
+  });
+
+  it('isola falha de handler assíncrono (promise rejeitada) sem impedir os demais', async () => {
+    const bus = new EventBus<Events>();
+    const handlerOk = vi.fn();
+
+    bus.on('item.created', async () => {
+      throw new Error('boom assíncrono');
+    });
+    bus.on('item.created', handlerOk);
+
+    await expect(bus.emit('item.created', { id: 1 })).resolves.toBeUndefined();
+    expect(handlerOk).toHaveBeenCalledWith({ id: 1 });
+  });
+
+  it('loga o erro do handler que falhou, sem propagar para quem chamou emit', async () => {
+    const logger = { error: vi.fn() };
+    const bus = new EventBus<Events>({ logger });
+    const error = new Error('boom');
+
+    bus.on('item.created', () => {
+      throw error;
+    });
+
+    await bus.emit('item.created', { id: 1 });
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'item.created', err: error }),
+      expect.any(String),
+    );
+  });
 });

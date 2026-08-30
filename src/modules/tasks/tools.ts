@@ -107,7 +107,7 @@ export function buildTasksTools(service: ItemService): ToolDefinition[] {
     description: 'Adia um item para uma data relativa em português (ex.: "sexta", "amanhã 14h").',
     inputSchema: snoozeItemInputSchema,
     async handler(input) {
-      const result = service.snoozeByText(input.id, input.relativeDateText);
+      const result = await service.snoozeByText(input.id, input.relativeDateText);
       if (!result) {
         throw new UnrecognizedDateError(input.relativeDateText);
       }
@@ -120,7 +120,7 @@ export function buildTasksTools(service: ItemService): ToolDefinition[] {
     description: 'Dropa um item (deleção lógica, reversível — nunca remove a linha).',
     inputSchema: itemIdInputSchema,
     async handler(input) {
-      return toToolOutput(service.drop(input.id));
+      return toToolOutput(await service.drop(input.id));
     },
   };
 

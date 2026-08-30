@@ -1,4 +1,14 @@
-import { assertTransition, parseRelativeDatePtBr, type ItemOrigin, type ItemPriority, type ItemRecord, type ItemType } from './domain/index.js';
+import {
+  assertTransition,
+  parseRelativeDatePtBr,
+  ITEM_DROPPED_EVENT,
+  ITEM_RESCHEDULED_EVENT,
+  type ItemOrigin,
+  type ItemPriority,
+  type ItemRecord,
+  type ItemType,
+  type TasksEventEmitter,
+} from './domain/index.js';
 import type { CreateItemInput, ItemsRepository } from './items-repository.js';
 
 export class ItemNotFoundError extends Error {
@@ -31,11 +41,18 @@ export interface ListItemsParams {
  * de estado (RF-07, ADR-009) passa por aqui, nunca por UPDATE direto fora
  * deste serviço. `now` é sempre injetado: nenhuma chamada a `new Date()` no
  * cálculo de "adia" (TESTING.md §7).
+ *
+ * `emit` publica `item.dropped`/`item.rescheduled` no bus (FEAT-004):
+ * `tasks` é fundação e não pode importar `chains` (ADR-011), então a única
+ * via para "chains reage a mudança de item" é o item avisar no bus, nunca
+ * uma chamada direta. Default no-op preserva todo teste/uso que não passa
+ * emitter (nenhum efeito colateral pra quem não assina nada).
  */
 export class ItemService {
   constructor(
     private readonly repository: ItemsRepository,
     private readonly now: () => Date = () => new Date(),
+    private readonly emit: TasksEventEmitter = () => undefined,
   ) {}
 
   create(params: CreateItemParams): ItemRecord {
@@ -72,11 +89,15 @@ export class ItemService {
   /**
    * Dropar é sempre lógico (ADR-009) — a coluna `status` vira `dropada`,
    * nunca um DELETE. Reversível por decisão de produto ("dropar sem culpa").
+   * Publica `item.dropped` depois de confirmada a transição — `chains`
+   * cancela a cadeia do compromisso, se houver uma (FEAT-004).
    */
-  drop(id: number): ItemRecord {
+  async drop(id: number): Promise<ItemRecord> {
     const item = this.getOrThrow(id);
     assertTransition(item.status, 'dropada');
-    return this.repository.updateStatus(id, 'dropada');
+    const dropped = this.repository.updateStatus(id, 'dropada');
+    await this.emit(ITEM_DROPPED_EVENT, { itemId: id });
+    return dropped;
   }
 
   /**
@@ -95,15 +116,19 @@ export class ItemService {
    * "adia [quando]" (RF-07): parsing de data relativa em PT-BR resolvido em
    * America/Sao_Paulo. Texto sem data reconhecível não adia nada — quem
    * chama decide como responder (nunca inventa uma data arbitrária).
+   * Publica `item.rescheduled` só quando a data de fato mudou — `chains`
+   * regenera a cadeia do compromisso a partir da nova data (FEAT-004).
    */
-  snoozeByText(id: number, relativeDateText: string): ItemRecord | undefined {
+  async snoozeByText(id: number, relativeDateText: string): Promise<ItemRecord | undefined> {
     const item = this.getOrThrow(id);
     assertTransition(item.status, 'adiada');
 
     const parsed = parseRelativeDatePtBr(relativeDateText, this.now());
     if (!parsed) return undefined;
 
-    return this.repository.snooze(id, parsed.dueAt);
+    const snoozed = this.repository.snooze(id, parsed.dueAt);
+    await this.emit(ITEM_RESCHEDULED_EVENT, { itemId: id, dueAt: snoozed.dueAt! });
+    return snoozed;
   }
 
   list(params: ListItemsParams = {}): ItemRecord[] {

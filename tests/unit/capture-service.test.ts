@@ -1,22 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
-import { runMigrations } from '../../src/core/db/migrator.js';
-import { coreMigrations } from '../../src/core/db/migrations/index.js';
-import { tasksMigrations } from '../../src/modules/tasks/migrations/index.js';
-import { ItemsRepository } from '../../src/modules/tasks/items-repository.js';
-import { ItemService } from '../../src/modules/tasks/item-service.js';
-import { JobRepository } from '../../src/core/scheduler/index.js';
-import { CaptureService } from '../../src/modules/capture/capture-service.js';
+import { buildCaptureTestContext } from '../factories/capture-test-context.js';
 
 // terça-feira 2026-08-25 10:00 America/Sao_Paulo (13:00 UTC) — mesma referência do parser de datas.
 const FIXED_NOW = new Date('2026-08-25T13:00:00.000Z');
 
-function buildService(): { db: Database.Database; service: CaptureService; jobRepository: JobRepository } {
-  const db = new Database(':memory:');
-  runMigrations(db, [...coreMigrations, ...tasksMigrations]);
-  const itemService = new ItemService(new ItemsRepository(db));
-  const jobRepository = new JobRepository(db);
-  return { db, service: new CaptureService(itemService, jobRepository, db), jobRepository };
+function buildService() {
+  // `now` fixo também para o ChainService (não só para parseRelativeDatePtBr) —
+  // expandChain descarta etapa cujo horário já passou, e a data real do
+  // sistema roda anos à frente de 2026-08-25 (TESTING.md §7).
+  const { db, captureService: service, jobRepository } = buildCaptureTestContext({ now: () => FIXED_NOW });
+  return { db, service, jobRepository };
 }
 
 describe('CaptureService (ponte captura -> task-store, RF-01/RF-03)', () => {
@@ -30,15 +23,34 @@ describe('CaptureService (ponte captura -> task-store, RF-01/RF-03)', () => {
     expect(jobRepository.findPending()).toHaveLength(0);
   });
 
-  it('item com dueExpression reconhecida (ADR-006) resolve via parseRelativeDatePtBr e agenda job "reminder"', () => {
+  it('item lembrete com dueExpression reconhecida (ADR-006) resolve via parseRelativeDatePtBr e agenda job "reminder" avulso', () => {
     const { service, jobRepository } = buildService();
 
-    service.captureItems([{ type: 'compromisso', title: 'dentista', dueExpression: 'sexta 14h' }], 1, FIXED_NOW);
+    service.captureItems([{ type: 'lembrete', title: 'ligar pro dentista', dueExpression: 'sexta 14h' }], 1, FIXED_NOW);
 
     const pending = jobRepository.findPending();
     expect(pending).toHaveLength(1);
     // 2026-08-28 é sexta-feira; 14h America/Sao_Paulo = 17h UTC.
     expect(pending[0]).toMatchObject({ type: 'reminder', next_run_at: '2026-08-28T17:00:00.000Z' });
+  });
+
+  it('item compromisso com dueExpression reconhecida gera event + cadeia inteira, nunca um job "reminder" avulso (FEAT-004)', () => {
+    const { db, service, jobRepository } = buildService();
+
+    service.captureItems([{ type: 'compromisso', title: 'dentista', dueExpression: 'sexta 14h' }], 1, FIXED_NOW);
+
+    const event = db.prepare('SELECT item_id, title, start_at, cadeia_gerada FROM events').get() as {
+      item_id: number;
+      title: string;
+      start_at: string;
+      cadeia_gerada: number;
+    };
+    expect(event).toMatchObject({ title: 'dentista', start_at: '2026-08-28T17:00:00.000Z', cadeia_gerada: 1 });
+
+    // véspera (qui 20h), manhã (sex 8h) e preparo (sex 14h - deslocamento - margem) — todas no futuro a partir de FIXED_NOW.
+    const pending = jobRepository.findPending();
+    expect(pending).toHaveLength(3);
+    expect(pending.every((j) => j.type === 'reminder')).toBe(true);
   });
 
   it('item com dueExpression não reconhecida vira inbox sem job, e sinaliza dueExpressionUnresolved (nunca data alucinada)', () => {
@@ -55,6 +67,7 @@ describe('CaptureService (ponte captura -> task-store, RF-01/RF-03)', () => {
     expect(row.status).toBe('inbox');
     expect(row.due_at).toBeNull();
     expect(jobRepository.findPending()).toHaveLength(0);
+    expect(db.prepare('SELECT COUNT(*) as c FROM events').get()).toMatchObject({ c: 0 });
   });
 
   it('item ambíguo é gravado em inbox', () => {
@@ -95,9 +108,9 @@ describe('CaptureService (ponte captura -> task-store, RF-01/RF-03)', () => {
   it('reprocessar o mesmo sourceMessageId não duplica item nem cria um segundo job (idempotência, ADR-018)', () => {
     const { db, service, jobRepository } = buildService();
 
-    service.captureItems([{ type: 'compromisso', title: 'dentista', dueExpression: 'sexta 14h' }], 5, FIXED_NOW);
+    service.captureItems([{ type: 'lembrete', title: 'ligar pro dentista', dueExpression: 'sexta 14h' }], 5, FIXED_NOW);
     const secondAttempt = service.captureItems(
-      [{ type: 'compromisso', title: 'dentista', dueExpression: 'sexta 14h' }],
+      [{ type: 'lembrete', title: 'ligar pro dentista', dueExpression: 'sexta 14h' }],
       5,
       FIXED_NOW,
     );
@@ -106,6 +119,21 @@ describe('CaptureService (ponte captura -> task-store, RF-01/RF-03)', () => {
     const count = db.prepare('SELECT COUNT(*) as c FROM items').get() as { c: number };
     expect(count.c).toBe(1);
     expect(jobRepository.findPending()).toHaveLength(1);
+  });
+
+  it('reprocessar captura de compromisso não duplica item nem gera uma segunda cadeia (idempotência, ADR-018)', () => {
+    const { db, service, jobRepository } = buildService();
+
+    service.captureItems([{ type: 'compromisso', title: 'dentista', dueExpression: 'sexta 14h' }], 6, FIXED_NOW);
+    const secondAttempt = service.captureItems(
+      [{ type: 'compromisso', title: 'dentista', dueExpression: 'sexta 14h' }],
+      6,
+      FIXED_NOW,
+    );
+
+    expect(secondAttempt).toHaveLength(0);
+    expect(db.prepare('SELECT COUNT(*) as c FROM events').get()).toMatchObject({ c: 1 });
+    expect(jobRepository.findPending()).toHaveLength(3);
   });
 
   it('mensagens de origem diferentes continuam gravando itens independentes', () => {
@@ -123,7 +151,7 @@ describe('CaptureService (ponte captura -> task-store, RF-01/RF-03)', () => {
     const threeItems = [
       { type: 'tarefa' as const, title: 'a' },
       { type: 'ideia' as const, title: 'b' },
-      { type: 'compromisso' as const, title: 'c', dueExpression: 'sexta 14h' },
+      { type: 'lembrete' as const, title: 'c', dueExpression: 'sexta 14h' },
     ];
 
     // Simula o processo morrendo logo após a primeira transação item+job
@@ -146,7 +174,7 @@ describe('CaptureService (ponte captura -> task-store, RF-01/RF-03)', () => {
     const titles = db.prepare('SELECT title FROM items ORDER BY source_item_index').all() as { title: string }[];
     expect(titles.map((r) => r.title)).toEqual(['a', 'b', 'c']);
 
-    // o item 2 (compromisso com dueExpression) precisa ter o job dele criado
+    // o item 2 (lembrete com dueExpression) precisa ter o job dele criado
     // na recuperação — não é só o item que faltava, é item+job juntos.
     expect(jobRepository.findPending()).toHaveLength(1);
   });
@@ -154,7 +182,7 @@ describe('CaptureService (ponte captura -> task-store, RF-01/RF-03)', () => {
   it('recuperação parcial não duplica nem recria o job do item que já tinha sido gravado com sucesso', () => {
     const { db, service, jobRepository } = buildService();
     const twoItems = [
-      { type: 'compromisso' as const, title: 'dentista', dueExpression: 'sexta 14h' },
+      { type: 'lembrete' as const, title: 'ligar pro dentista', dueExpression: 'sexta 14h' },
       { type: 'nota' as const, title: 'ideia solta' },
     ];
 
