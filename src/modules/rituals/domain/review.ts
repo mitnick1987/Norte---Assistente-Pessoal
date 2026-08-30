@@ -1,4 +1,4 @@
-import type { PrioritizableItem } from './priority-selection.js';
+import type { PrioritizableItem } from '../../tasks/public/index.js';
 
 export interface ReviewCompletedEntry {
   readonly title: string;
@@ -18,6 +18,17 @@ export interface ReviewData {
   readonly completedToday: readonly ReviewCompletedEntry[];
   readonly rescheduledToTomorrow: readonly ReviewRescheduledEntry[];
   readonly decisionRequested: ReviewDecisionCandidate | undefined;
+  /**
+   * Mensagem de proposta de higiene já pronta (FEAT-007, RF-11) — vem de
+   * `hygiene/public` como texto determinístico, não como dado bruto: quem
+   * monta a revisão não recalcula a régua de tom da higiene, só encaixa a
+   * mensagem já formulada. Presente aqui SUBSTITUI `decisionRequested` na
+   * hora de montar a mensagem (nunca soma as duas — spec item 4: continua
+   * "no máximo uma decisão" por revisão).
+   */
+  readonly hygieneMessage: string | undefined;
+  /** Item ao qual `hygieneMessage` se refere (achado de review) — o job handler registra em `pending_menus` para o "1/2/3" da higiene resolver contra o item certo. */
+  readonly hygieneItemId: number | undefined;
 }
 
 /**
@@ -39,11 +50,15 @@ export function buildReviewData(
   completedToday: readonly ReviewCompletedEntry[],
   rescheduledToTomorrow: readonly ReviewRescheduledEntry[],
   eligibleForDecision: readonly PrioritizableItem[],
+  hygieneMessage?: string,
+  hygieneItemId?: number,
 ): ReviewData {
   return {
     completedToday,
     rescheduledToTomorrow,
     decisionRequested: selectReviewDecisionCandidate(eligibleForDecision),
+    hygieneMessage,
+    hygieneItemId,
   };
 }
 
@@ -70,7 +85,11 @@ export function buildReviewFallbackMessages(data: ReviewData): string[] {
     messages.push(`Fica para amanhã: ${titles}.`);
   }
 
-  if (data.decisionRequested) {
+  // Higiene (RF-11) substitui a pergunta genérica quando há candidato — as
+  // duas nunca somam (spec item 4: "no máximo uma decisão" continua valendo).
+  if (data.hygieneMessage) {
+    messages.push(data.hygieneMessage);
+  } else if (data.decisionRequested) {
     messages.push(`Sobre "${data.decisionRequested.title}": o que você quer fazer? 1) manter 2) adiar 3) dropar`);
   }
 

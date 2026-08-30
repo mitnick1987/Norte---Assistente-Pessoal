@@ -1,7 +1,7 @@
 import type { Logger } from 'pino';
 import type { JobHandler } from '../kernel/types.js';
-import { selectDueJobs, nextOccurrence, type DueJobCandidate, type RecurrenceRule } from './domain/index.js';
-import type { JobRepository, JobRow } from './job-repository.js';
+import { selectDueJobs, nextOccurrence, type DueJobCandidate } from './domain/index.js';
+import { parseRecurrence, type JobRepository, type JobRow } from './job-repository.js';
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -63,17 +63,30 @@ export class Scheduler {
     }
 
     this.deps.repository.markRunning(jobId);
+    const recurrence = parseRecurrence(row.recurrence);
 
     try {
       await handler({ jobId, payload: JSON.parse(row.payload) });
 
-      if (row.recurrence) {
-        const next = nextOccurrence(this.now(), row.recurrence as RecurrenceRule);
+      if (recurrence) {
+        const next = nextOccurrence(this.now(), recurrence);
         this.deps.repository.rescheduleRecurring(jobId, next);
       }
     } catch (err) {
       this.deps.repository.incrementAttempts(jobId);
       this.deps.logger.error({ jobId, err }, 'falha ao executar job');
+
+      // Job recorrente não pode morrer preso em 'running' por uma exceção
+      // isolada (ADR-004): sem isso, 'cobranca' e qualquer outro job `every`
+      // param de vez até um restart, porque `findPending` só enxerga
+      // 'pending'. Reagenda a próxima ocorrência mesmo em falha — uma
+      // execução ruim vira log de erro, nunca interrompe a recorrência.
+      if (recurrence) {
+        const next = nextOccurrence(this.now(), recurrence);
+        this.deps.repository.rescheduleRecurring(jobId, next);
+        return;
+      }
+
       throw err;
     }
   }

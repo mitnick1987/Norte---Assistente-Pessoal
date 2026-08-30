@@ -1,4 +1,4 @@
-import { selectTopPriorities, type PrioritizableItem } from './priority-selection.js';
+import { selectTopPriorities, type PrioritizableItem } from '../../tasks/public/index.js';
 import { buildMicroStep } from './micro-step.js';
 
 /** Nenhum campo de agenda vem da API do Google crua além do necessário para redigir — nunca `snoozeCount`, nunca backlog completo (spec item 5). */

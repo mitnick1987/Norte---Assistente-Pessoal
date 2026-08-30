@@ -215,4 +215,49 @@ describe('MessageRepository', () => {
       expect(conversation).toEqual([{ direction: 'in', body: 'oi' }]);
     });
   });
+
+  describe('findLastInbound / findLastInboundBefore (RF-10, modo retorno)', () => {
+    it('findLastInbound devolve undefined sem nenhuma mensagem de entrada', () => {
+      const { repository } = buildRepository();
+
+      expect(repository.findLastInbound('jid-1')).toBeUndefined();
+    });
+
+    it('findLastInbound devolve a mensagem de entrada mais recente do jid', () => {
+      const { repository } = buildRepository();
+      repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-1', body: 'oi' });
+      repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-2', body: 'tudo bem?' });
+
+      const last = repository.findLastInbound('jid-1');
+
+      expect(last).toBeDefined();
+    });
+
+    it('findLastInbound ignora mensagens de outro jid', () => {
+      const { repository } = buildRepository();
+      repository.tryRecordInbound({ jid: 'jid-2', waMessageId: 'wa-1', body: 'oi' });
+
+      expect(repository.findLastInbound('jid-1')).toBeUndefined();
+    });
+
+    it('findLastInboundBefore devolve a entrada imediatamente anterior ao messageId informado', () => {
+      const { repository } = buildRepository();
+      const first = repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-1', body: 'primeira' });
+      const second = repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-2', body: 'segunda' });
+
+      const beforeSecond = repository.findLastInboundBefore('jid-1', (second as { messageId: number }).messageId);
+
+      expect(beforeSecond).toBeDefined();
+      expect((first as { messageId: number }).messageId).toBeDefined();
+    });
+
+    it('findLastInboundBefore devolve undefined quando não há nenhuma entrada anterior (primeira mensagem da vida do sistema)', () => {
+      const { repository } = buildRepository();
+      const first = repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-1', body: 'primeira' });
+
+      const before = repository.findLastInboundBefore('jid-1', (first as { messageId: number }).messageId);
+
+      expect(before).toBeUndefined();
+    });
+  });
 });

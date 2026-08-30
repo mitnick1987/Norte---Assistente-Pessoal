@@ -1,8 +1,16 @@
 /**
- * Recorte mínimo de item que a seleção de prioridades do briefing precisa —
- * função pura, sem I/O (ARCHITECTURE.md §4). Nunca `snoozeCount`: o tipo não
- * tem o campo, então a omissão no payload de redação é estrutural, não uma
- * questão de lembrar de filtrar (mesma garantia de `tasks/tools.ts`).
+ * Recorte mínimo de item que o critério de ranking por prazo/prioridade
+ * precisa — função pura, sem I/O (ARCHITECTURE.md §4). Nunca `snoozeCount`:
+ * o tipo não tem o campo, então a omissão no payload de redação é
+ * estrutural, não uma questão de lembrar de filtrar (mesma garantia de
+ * `tasks/tools.ts`).
+ *
+ * Vive em `tasks/domain` (extraído de `rituals/domain` na FEAT-007) porque
+ * `rituals` e `next-action` compartilham o mesmíssimo critério de seleção
+ * (briefing e "qual a próxima" são a mesma pergunta em contextos diferentes,
+ * spec FEAT-007) e nenhum módulo pode depender de interno do outro
+ * (`eslint-plugin-boundaries`) — `tasks` é o único módulo que ambos já
+ * importam pelo contrato público.
  */
 export interface PrioritizableItem {
   readonly id: number;

@@ -212,4 +212,30 @@ describe('migrações base do core', () => {
     ).toThrow();
     expect(tableNames(db)).toContain('jobs');
   });
+
+  it('migração 010 cria pending_menus com CHECK de origin fechado (cobranca|revisao|higiene)', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    expect(tableNames(db)).toContain('pending_menus');
+
+    expect(() =>
+      db.prepare(`INSERT INTO pending_menus (origin, item_id) VALUES ('cobranca', 1)`).run(),
+    ).not.toThrow();
+    expect(() =>
+      db.prepare(`INSERT INTO pending_menus (origin, item_id) VALUES ('inventado', 1)`).run(),
+    ).toThrow();
+  });
+
+  it('down da migração 010 remove pending_menus por completo', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    const migration = coreMigrations.find((m) => m.id === '010_core_pending_menus');
+    expect(migration).toBeDefined();
+
+    rollbackMigration(db, migration!);
+
+    expect(tableNames(db)).not.toContain('pending_menus');
+  });
 });

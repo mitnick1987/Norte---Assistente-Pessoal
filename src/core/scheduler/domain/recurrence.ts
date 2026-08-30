@@ -2,11 +2,13 @@ import { addZonedDays, addZonedMonths, toZonedParts, zonedTimeToUtc } from './ti
 
 /**
  * Recorrências suportadas nesta fundação — o vocabulário cresce junto com
- * os módulos que precisarem (chains, rituals). `daily`/`weekly`/`monthly`
- * bastam para provar o cálculo TZ-aware; RRULE completo fica para quando
- * um RF concreto exigir.
+ * os módulos que precisarem (chains, rituals, nudges). `daily`/`weekly`/
+ * `monthly` bastam para os rituais diários/cadências de calendário; `every`
+ * (FEAT-007, `modules/nudges`) cobre o caso de um job que precisa reavaliar
+ * elegibilidade várias vezes ao dia (cobrança) sem virar cron em memória —
+ * RRULE completo fica para quando um RF concreto exigir mais que isso.
  */
-export type RecurrenceRule = 'daily' | 'weekly' | 'monthly';
+export type RecurrenceRule = 'daily' | 'weekly' | 'monthly' | { readonly kind: 'every'; readonly minutes: number };
 
 /**
  * Gera a próxima ocorrência a partir do instante do disparo (fireAt), nunca
@@ -15,6 +17,10 @@ export type RecurrenceRule = 'daily' | 'weekly' | 'monthly';
  * entre dois disparos.
  */
 export function nextOccurrence(fireAt: Date, rule: RecurrenceRule): Date {
+  if (typeof rule === 'object') {
+    return new Date(fireAt.getTime() + rule.minutes * 60_000);
+  }
+
   const parts = toZonedParts(fireAt);
 
   switch (rule) {

@@ -86,6 +86,11 @@ export class ItemService {
     return item;
   }
 
+  /** Leitura sem lançar (RF-08, achado de review): quem precisa checar o status atual antes de decidir uma ação — nunca assumir que o item ainda está no estado esperado. */
+  findById(id: number): ItemRecord | undefined {
+    return this.repository.findById(id);
+  }
+
   complete(id: number): ItemRecord {
     const item = this.getOrThrow(id);
     assertTransition(item.status, 'feita');
@@ -132,7 +137,25 @@ export class ItemService {
     const parsed = parseRelativeDatePtBr(relativeDateText, this.now());
     if (!parsed) return undefined;
 
-    const snoozed = this.repository.snooze(id, parsed.dueAt);
+    return this.applySnooze(id, parsed.dueAt);
+  }
+
+  /**
+   * Mesma transição de `snoozeByText`, mas para quando a data já foi
+   * resolvida por outro caminho determinístico (RF-08: proposta de
+   * reagendamento de `modules/nudges`, calculada a partir de `patterns` ou
+   * do fallback de settings) — sem reparsear um texto formulado só para
+   * exibição ao usuário de volta em `parseRelativeDatePtBr`.
+   */
+  async snoozeToDate(id: number, dueAt: Date): Promise<ItemRecord> {
+    const item = this.getOrThrow(id);
+    assertTransition(item.status, 'adiada');
+
+    return this.applySnooze(id, dueAt);
+  }
+
+  private async applySnooze(id: number, dueAt: Date): Promise<ItemRecord> {
+    const snoozed = this.repository.snooze(id, dueAt);
     await this.emit(ITEM_RESCHEDULED_EVENT, { itemId: id, dueAt: snoozed.dueAt! });
     return snoozed;
   }

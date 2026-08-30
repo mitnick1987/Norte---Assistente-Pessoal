@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/core/db/migrator.js';
 import { coreMigrations } from '../../src/core/db/migrations/index.js';
-import { JobRepository } from '../../src/core/scheduler/job-repository.js';
+import { JobRepository, parseRecurrence } from '../../src/core/scheduler/job-repository.js';
 
 function buildRepository(): { db: Database.Database; repository: JobRepository } {
   const db = new Database(':memory:');
@@ -78,5 +78,27 @@ describe('JobRepository', () => {
 
     const row = repository.findById(id);
     expect(JSON.parse(row!.payload)).toEqual({ itemId: 42 });
+  });
+
+  it('recorrência composta "every" (FEAT-007) é serializada como JSON, não como [object Object]', () => {
+    const { repository } = buildRepository();
+    const id = repository.create({
+      type: 'cobranca',
+      nextRunAt: new Date(),
+      recurrence: { kind: 'every', minutes: 60 },
+    });
+
+    const row = repository.findById(id);
+    expect(row?.recurrence).not.toBe('[object Object]');
+    expect(parseRecurrence(row!.recurrence)).toEqual({ kind: 'every', minutes: 60 });
+  });
+
+  it('parseRecurrence devolve a string simples intacta para recorrências não compostas', () => {
+    expect(parseRecurrence('daily')).toBe('daily');
+    expect(parseRecurrence(null)).toBeUndefined();
+  });
+
+  it('parseRecurrence nunca lança em valor corrompido — recorrência inválida só para de recorrer', () => {
+    expect(parseRecurrence('não é json nem recorrência válida')).toBeUndefined();
   });
 });

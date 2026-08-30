@@ -74,6 +74,30 @@ export class OutboxRepository {
   }
 
   /**
+   * Orçamento já comprometido do teto diário (achado de review, FEAT-007):
+   * `countProactiveSentSince` só vê `delivered`, então um chamador que decide
+   * "vale a pena enfileirar mais uma proativa?" olhando só entregues
+   * subestima o consumo — mensagens já `pending`/`sending` do dia também vão
+   * disputar o mesmo teto quando o processor rodar. `failed` fica de fora:
+   * retries esgotados não devem contar contra o orçamento de hoje.
+   *
+   * `created_at` é preenchido por `DEFAULT (datetime('now'))` (formato
+   * `YYYY-MM-DD HH:MM:SS`, sem "T"/"Z"), enquanto `sinceIso` chega em ISO — a
+   * comparação de string `>=` crua entre os dois formatos é incorreta
+   * (o espaço do primeiro ordena antes do "T" do segundo). `datetime(...)`
+   * dos dois lados normaliza ambos pro mesmo formato interno antes de comparar.
+   */
+  countProactiveCommittedSince(sinceIso: string): number {
+    const row = this.db
+      .prepare<[string], { count: number }>(
+        `SELECT COUNT(*) as count FROM outbox_messages
+         WHERE is_proactive = 1 AND status IN ('pending', 'sending', 'delivered') AND datetime(created_at) >= datetime(?)`,
+      )
+      .get(sinceIso);
+    return row?.count ?? 0;
+  }
+
+  /**
    * Claim atômico: só transiciona quem ainda está `pending`. Duas execuções
    * concorrentes de processPending (tick do scheduler + disparo direto, ou
    * dois ticks intercalados por um sleep) nunca conseguem as duas marcar a
