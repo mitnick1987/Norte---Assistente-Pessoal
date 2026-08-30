@@ -1,6 +1,6 @@
 # FEAT-004 — Eventos e cadeias de lembrete contra cegueira temporal
 
-**Status:** rascunho · **Issue:** #14 · **Branch:** `feature/FEAT-004-cadeias-lembrete` · **Data:** 2026-08-30
+**Status:** entregue · **Issue:** #14 · **Branch:** `feature/FEAT-004-cadeias-lembrete` · **Data:** 2026-08-30
 
 ## Contexto e objetivo
 
@@ -93,10 +93,21 @@ Com o sistema rodando e `ANTHROPIC_API_KEY` real preenchida:
 
 ---
 
-## Entrega (preencher no fim, antes do merge)
+## Entrega
 
-- **O que foi feito:** resumo fiel do que entrou (difere da spec? diga onde e por quê)
-- **PRs:** #NN
-- **Migrações:** nomes dos arquivos
-- **Pendências/débitos:** TODOs criados com issues (`#NN`)
-- **Aprendizados:** o que o próximo dev precisa saber e não está óbvio no código
+- **O que foi feito:** todo o escopo da spec entrou, sem desvio de comportamento. Entidade `events` em `modules/tasks` (migração `tasks_004_events`) com `EventsRepository`/`EventService` — deleção sempre lógica (`status = cancelado`), `gcal_id` nulo até a FEAT-005. Módulo novo `modules/chains` com o gerador puro `expandChain` (`modules/chains/domain/expand-chain.ts`): dado um evento e as antecedências de `settings`, devolve véspera/manhã/preparo já resolvidos em `America/Sao_Paulo`, descartando qualquer candidato cujo `fireAt` caia no passado **ou** no próprio horário do compromisso ou depois dele — essa segunda guarda (`fireAt >= startAt`) não estava na primeira versão e foi achado do review: com `manhaHour` tardio e compromisso de manhã cedo, o alerta "de manhã" podia nascer depois do próprio compromisso, o oposto do que RF-04 pede. Templates determinísticos por etapa em `modules/chains/domain/chain-templates.ts` (mesmo padrão de banco estático de variação da FEAT-002), com o alerta de saída sempre formulado como tempo restante ("faltam N min pra sair") recalculado no momento do disparo pelo handler (`modules/capture/reminder-job.ts`), nunca congelado na criação do job. `capture-service.ts` cria `event` + cadeia inteira quando o item é `compromisso` com `dueExpression` resolvida; qualquer outro caso (compromisso sem hora, ou outro tipo) segue exatamente como a FEAT-002 deixou.
+
+  Dois pontos merecem destaque por não estarem óbvios lendo só o escopo acima:
+
+  1. **Cancelamento e regeneração passam pelo `EventBus`, não por chamada direta — primeiro uso real do bus desde que ele foi criado na FEAT-001 (ADR-011).** `ItemService.drop`/`snoozeByText` publicam `item.dropped`/`item.rescheduled`; `modules/chains` assina os dois em `buildChainsModule` (manifest.ts) e reage cancelando o evento ativo do item e os jobs `reminder` ainda `pending` da cadeia associada (`ChainService.onItemDropped`/`onItemRescheduled` em `chain-service.ts`). É o primeiro caso em que `tasks` precisa avisar um módulo que não conhece, e o bus é exatamente o mecanismo que o ADR-011 previu pra isso — `tasks` continua sem importar `chains`. O `EventBus` (`src/core/bus/event-bus.ts`) ganhou isolamento de erro por assinante nesta feature: cada `handler` roda em `try/catch` próprio dentro do `emit`, com o erro só logado (`EventBusLogger`), nunca propagado — um handler de `chains` que lançasse não podia impedir outros assinantes futuros de rodar. Não havia essa proteção antes porque não havia mais de um assinante real para testar.
+
+  2. **Cancelamento de cadeia usa o status `cancelado` novo em `jobs`, não `failed`.** A tabela `jobs` (FEAT-001) tinha `CHECK (status IN ('pending','running','sent','confirmed','failed'))`; ampliar esse vocabulário exigiu migração própria (`007_core_jobs_cancelado_status`, em `core/db/migrations`, não em `tasks` — a tabela é de `core/scheduler`) porque SQLite não altera `CHECK` de coluna existente: a migração recria a tabela (cria `jobs_new`, copia dados, dropa a antiga, renomeia, recria o índice `jobs_due_lookup`). O motivo de existir: a métrica de entrega de 99,5% do PRD (ARCHITECTURE.md §6) deriva do status dos jobs — se o cancelamento de rotina (drop ou reagendamento de compromisso) marcasse os jobs pendentes como `failed`, cada "dropa"/reagendamento do dia inflaria a métrica de falha por um comportamento normal do produto, não um incidente de entrega real. `down` é reversível e documentado como mapeamento com perda: como `cancelado` não existe no schema anterior, jobs nesse status viram `failed` no downgrade (não há como preservar o rastro sem a coluna) — é o melhor mapeamento reversível disponível, registrado em comentário na própria migração.
+
+- **Desvios de escopo/arquitetura registrados acima:** nenhum de comportamento. A guarda extra em `expandChain` (item 1) é refinamento do próprio requisito da spec ("etapa que cairia no passado é omitida"), não mudança de escopo — o review só tornou explícito um caso limite que a primeira versão não cobria.
+- **PRs:** feature implementada na branch `feature/FEAT-004-cadeias-lembrete` (commits `e3faa93` spec, `a243cbb` implementação, `70da275` correções do review); PR para `main` aberto nesta entrega.
+- **Migrações:** `tasks_004_events` (tabela `events`, em `modules/tasks/migrations`); `007_core_jobs_cancelado_status` (amplia `CHECK` de `jobs.status` para incluir `cancelado`, em `core/db/migrations`, com `down` que remapeia `cancelado` → `failed`).
+- **Pendências/débitos:** nenhum `TODO` novo aberto nesta feature. Google Calendar, briefing matinal, checklist de preparação, cadeia de boletos, reagendamento por linguagem livre, cobrança de confirmação e proatividade adaptativa dos horários seguem mapeados em "Fora de escopo" — não são débito desta entrega.
+- **Aprendizados:**
+  - Quem for adicionar um segundo assinante a qualquer evento do bus deve saber que o isolamento de erro (`EventBus`, item 1 acima) só existe desde esta feature — antes dela, um handler que lançasse quebraria o `emit` inteiro sem nenhum teste cobrindo esse caso, porque só havia zero assinantes.
+  - `JobRepository.findPendingByType` (novo, `core/scheduler/job-repository.ts`) filtra por `type` usando o índice `jobs_due_lookup` (`status, next_run_at`) e resolve o vínculo com o evento em código, lendo `eventId` do `payload` — não existe índice sobre o `payload` JSON; se o volume de jobs `reminder` pendentes crescer muito, essa varredura é o primeiro lugar a olhar antes de mexer no schema de `jobs` de novo.
+  - Review desta entrega teve 2 achados importantes e 2 sugestões, todos corrigidos antes do merge (nenhum refutado); `security-auditor` não foi acionado porque o diff não toca área sensível (sem env var nova, sem chamada a serviço externo novo) — só o `code-reviewer` revisou aderência ao ADR-004/ADR-006/ADR-011.
