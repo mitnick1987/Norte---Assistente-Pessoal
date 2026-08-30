@@ -21,7 +21,7 @@ import {
 } from '../../src/modules/integrations/google-calendar/google-calendar-service.js';
 import { AuthTokenNotFoundError } from '../../src/modules/integrations/google-calendar/domain/index.js';
 import type { GoogleOAuthPort, GoogleTokenSet } from '../../src/modules/integrations/google-calendar/google-oauth-client.js';
-import type { FailureAlerter } from '../../src/core/outbox/index.js';
+import { buildAlerterStub } from '../factories/alerter-stub.js';
 
 const FIXED_NOW = new Date('2026-09-01T13:00:00.000Z'); // terça 10h SP
 const CHAIN_SETTINGS = { vesperaHour: 20, manhaHour: 8, prepMarginMin: 15 };
@@ -56,11 +56,7 @@ function buildContext(oauthOverrides: Partial<GoogleOAuthPort> = {}) {
     ...oauthOverrides,
   };
 
-  const alerter: FailureAlerter = {
-    alertDeliveryExhausted: vi.fn(),
-    alertRefreshFailure: vi.fn(),
-    alertAnchorRitualCapped: vi.fn(),
-  };
+  const alerter = buildAlerterStub();
 
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 

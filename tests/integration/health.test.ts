@@ -59,4 +59,71 @@ describe('GET /health', () => {
 
     expect(body.scheduler.lastTickAt).not.toBeNull();
   });
+
+  it('reporta degraded com HTTP 503 quando a sessão WhatsApp está fora do estado conectado (FEAT-008, fecha BUG-002)', async () => {
+    await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': 'a'.repeat(32) },
+      payload: { event: 'connection.update', instance: 'norte-test', data: { state: 'close' } },
+    });
+
+    const response = await app.fastify.inject({ method: 'GET', url: '/health' });
+    const body = JSON.parse(response.body);
+
+    expect(response.statusCode).toBe(503);
+    expect(body.status).toBe('degraded');
+    expect(body.whatsapp.status).toBe('degraded');
+  });
+
+  it('reporta degraded com HTTP 503 quando o scheduler não tem tick recente, mesmo com DB e sessão ok', async () => {
+    let now = new Date('2026-08-30T12:00:00.000Z');
+    const staleApp = buildTestApp({}, { now: () => now });
+
+    try {
+      await staleApp.fastify.inject({
+        method: 'POST',
+        url: '/webhook/evolution',
+        headers: { 'x-webhook-secret': 'a'.repeat(32) },
+        payload: { event: 'connection.update', instance: 'norte-test', data: { state: 'open' } },
+      });
+      await staleApp.scheduler.tick(); // fixa lastSchedulerTickAt em `now` (T0)
+
+      // avança o relógio além da janela de tolerância (default 180_000ms) sem rodar outro tick
+      now = new Date(now.getTime() + 200_000);
+
+      const response = await staleApp.fastify.inject({ method: 'GET', url: '/health' });
+      const body = JSON.parse(response.body);
+
+      expect(response.statusCode).toBe(503);
+      expect(body.status).toBe('degraded');
+      expect(body.scheduler.status).toBe('stale');
+      expect(body.db).toBe('ok');
+      expect(body.whatsapp.status).toBe('ok');
+    } finally {
+      await staleApp.fastify.close();
+      staleApp.db.close();
+    }
+  });
+
+  it('volta a 200/ok quando a sessão reconecta depois de ter caído', async () => {
+    await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': 'a'.repeat(32) },
+      payload: { event: 'connection.update', instance: 'norte-test', data: { state: 'close' } },
+    });
+    await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': 'a'.repeat(32) },
+      payload: { event: 'connection.update', instance: 'norte-test', data: { state: 'open' } },
+    });
+
+    const response = await app.fastify.inject({ method: 'GET', url: '/health' });
+    const body = JSON.parse(response.body);
+
+    expect(response.statusCode).toBe(200);
+    expect(body.status).toBe('ok');
+  });
 });

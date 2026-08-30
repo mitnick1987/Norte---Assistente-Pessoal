@@ -75,4 +75,24 @@ describe('loadEnv', () => {
   it('rejeita GOOGLE_REDIRECT_URI que não seja uma URL', () => {
     expect(() => loadEnv({ ...validEnv(), GOOGLE_REDIRECT_URI: 'não-é-url' })).toThrow(InvalidEnvError);
   });
+
+  it('sobe sem RESEND_API_KEY nem HEALTHCHECKS_PING_URL (FEAT-008): ambos opcionais, nunca erro de boot', () => {
+    const env = loadEnv(validEnv());
+    expect(env.RESEND_API_KEY).toBeUndefined();
+    expect(env.HEALTHCHECKS_PING_URL).toBeUndefined();
+  });
+
+  it('aceita RESEND_API_KEY quando configurada', () => {
+    const env = loadEnv({ ...validEnv(), RESEND_API_KEY: 'resend-key' });
+    expect(env.RESEND_API_KEY).toBe('resend-key');
+  });
+
+  it('rejeita HEALTHCHECKS_PING_URL que não seja uma URL', () => {
+    expect(() => loadEnv({ ...validEnv(), HEALTHCHECKS_PING_URL: 'não-é-url' })).toThrow(InvalidEnvError);
+  });
+
+  it('aceita HEALTHCHECKS_PING_URL válida', () => {
+    const env = loadEnv({ ...validEnv(), HEALTHCHECKS_PING_URL: 'https://hc-ping.com/uuid' });
+    expect(env.HEALTHCHECKS_PING_URL).toBe('https://hc-ping.com/uuid');
+  });
 });

@@ -18,7 +18,7 @@ import { TokenCipher } from '../../src/modules/integrations/google-calendar/toke
 import { GoogleCalendarService } from '../../src/modules/integrations/google-calendar/google-calendar-service.js';
 import { registerGoogleCalendarSetupRoutes } from '../../src/modules/integrations/google-calendar/setup-routes.js';
 import type { GoogleOAuthPort } from '../../src/modules/integrations/google-calendar/google-oauth-client.js';
-import type { FailureAlerter } from '../../src/core/outbox/index.js';
+import { buildAlerterStub } from '../factories/alerter-stub.js';
 
 const ACCESS_TOKEN = 'access-token-nao-pode-vazar-em-log-nem-no-sqlite';
 const REFRESH_TOKEN = 'refresh-token-nao-pode-vazar-em-log-nem-no-sqlite';
@@ -67,7 +67,7 @@ function buildContext() {
     insertEvent: vi.fn(),
   };
 
-  const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn(), alertAnchorRitualCapped: vi.fn() };
+  const alerter = buildAlerterStub();
 
   const logs: unknown[] = [];
   const logger = {
@@ -193,7 +193,7 @@ describe('Suite S (TESTING.md §3), estendida FEAT-005: tokens do Google Calenda
         jobRepository: new JobRepository(ctx.db),
         getSettings: () => ({ vesperaHour: 20, manhaHour: 8, prepMarginMin: 15 }),
       }),
-      alerter: { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn(), alertAnchorRitualCapped: vi.fn() },
+      alerter: buildAlerterStub(),
       logger: realLogger,
       getDeslocamentoMinDefault: () => 30,
     });

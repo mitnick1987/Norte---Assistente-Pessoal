@@ -4,6 +4,7 @@ import type { OutboxRepository, OutboxMessageRow } from '../../src/core/outbox/o
 import type { MessageSender } from '../../src/core/outbox/sender.js';
 import type { FailureAlerter } from '../../src/core/outbox/alerter.js';
 import { MAX_ATTEMPTS } from '../../src/core/outbox/domain/backoff.js';
+import { buildAlerterStub as buildAlerter } from '../factories/alerter-stub.js';
 
 function buildRow(overrides: Partial<OutboxMessageRow>): OutboxMessageRow {
   return {
@@ -17,15 +18,6 @@ function buildRow(overrides: Partial<OutboxMessageRow>): OutboxMessageRow {
     attempts: 0,
     delivered_at: null,
     retry_after: null,
-    ...overrides,
-  };
-}
-
-function buildAlerter(overrides: Partial<FailureAlerter> = {}): FailureAlerter {
-  return {
-    alertDeliveryExhausted: vi.fn(),
-    alertRefreshFailure: vi.fn(),
-    alertAnchorRitualCapped: vi.fn(),
     ...overrides,
   };
 }

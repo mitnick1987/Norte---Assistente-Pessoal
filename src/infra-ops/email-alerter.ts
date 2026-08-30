@@ -1,52 +1,124 @@
 import type { Logger } from 'pino';
 import type { FailureAlerter } from '../core/outbox/alerter.js';
+import type { Mailer } from './mailer.js';
+import type { AlertDispatchRepository } from './alert-dispatch-repository.js';
+import { shouldSendAlert } from './domain/anti-flood.js';
+import {
+  anchorRitualCappedMessage,
+  cacheRegressionMessage,
+  costBudgetExceededMessage,
+  deliveryExhaustedMessage,
+  diskUsageMessage,
+  refreshFailureMessage,
+  sessionDownMessage,
+} from './domain/alert-templates.js';
 
 export interface EmailAlerterConfig {
-  readonly smtpUrl: string | undefined;
   readonly alertEmail: string | undefined;
+  /**
+   * Janela de anti-flood por chave lógica (spec item 1, Decisões tomadas) —
+   * thunk porque `settings` (SQLite) só termina de semear defaults depois
+   * que `app.ts` roda `seedDefaults` (o `EmailAlerter` nasce antes disso) —
+   * ler uma vez no construtor congelaria o valor em `undefined` para sempre.
+   */
+  readonly getAntiFloodWindowMs: () => number;
 }
 
 /**
- * Canal de alerta fora do WhatsApp (ARCHITECTURE.md §6). Sem cliente SMTP
- * nesta fundação — envio real entra junto com o primeiro RF que dependa
- * dele (RF-13, fora de escopo da FEAT-001); aqui a responsabilidade é só
- * logar em `error` para nunca haver falha silenciosa mesmo com o
- * transporte de e-mail ainda não implementado.
+ * Canal de alerta fora do WhatsApp (ARCHITECTURE.md §6). `mailer` ausente
+ * (nenhum transporte configurado, nem SMTP nem Resend) faz todo alerta cair
+ * em log `error` — nunca falha em silêncio mesmo sem credencial nenhuma.
+ * Anti-flood por chave lógica: mesma falha não reenvia dentro da janela,
+ * mas tipos diferentes de alerta nunca competem pela mesma cota (spec,
+ * Decisões tomadas).
  */
 export class EmailAlerter implements FailureAlerter {
   constructor(
     private readonly config: EmailAlerterConfig,
+    private readonly mailer: Mailer | undefined,
+    private readonly dispatchRepository: AlertDispatchRepository,
     private readonly logger: Logger,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async alertDeliveryExhausted(message: { id: number; jid: string; attempts: number }): Promise<void> {
-    if (!this.config.smtpUrl || !this.config.alertEmail) {
-      this.logger.error({ message }, 'alerta de entrega esgotada sem transporte de e-mail configurado');
+  private async dispatch(alertKey: string, build: () => { subject: string; text: string }, logPayload: Record<string, unknown>): Promise<void> {
+    if (!this.mailer || !this.config.alertEmail) {
+      this.logger.error(logPayload, 'alerta sem transporte de e-mail configurado');
       return;
     }
-    // e-mail do dono é PII e não entra no log estruturado — id/jid já bastam
-    // para correlacionar o incidente (SECURITY.md §4 trata log como superfície
-    // de vazamento mesmo sem ser secret de sistema).
-    this.logger.error({ message }, 'alerta de entrega esgotada');
+
+    const lastSentAt = this.dispatchRepository.findLastSentAt(alertKey);
+    if (!shouldSendAlert(lastSentAt, this.now(), this.config.getAntiFloodWindowMs())) {
+      this.logger.info({ alertKey }, 'alerta suprimido pelo anti-flood (mesma chave dentro da janela)');
+      return;
+    }
+
+    const { subject, text } = build();
+    try {
+      await this.mailer.send({ to: this.config.alertEmail, subject, text });
+      this.dispatchRepository.recordSent(alertKey, this.now());
+    } catch (err) {
+      // Falha de envio não tem canal acima do e-mail para escalar (spec,
+      // Decisões tomadas) — só log `error`. `err` nunca bruto: pode carregar
+      // corpo de resposta do provedor SMTP/Resend com credencial embutida.
+      const message = err instanceof Error ? err.message : 'erro desconhecido';
+      this.logger.error({ ...logPayload, message }, 'falha ao enviar e-mail de alerta');
+    }
+  }
+
+  async alertDeliveryExhausted(message: { id: number; jid: string; attempts: number }): Promise<void> {
+    await this.dispatch(
+      `delivery_exhausted:${message.id}`,
+      () => deliveryExhaustedMessage(message),
+      { message },
+    );
   }
 
   async alertRefreshFailure(context: { provider: string; err: unknown }): Promise<void> {
-    if (!this.config.smtpUrl || !this.config.alertEmail) {
-      this.logger.error({ provider: context.provider }, 'alerta de falha de refresh OAuth sem transporte de e-mail configurado');
-      return;
-    }
     // `err` nunca entra bruto no log estruturado (pode carregar corpo de
     // resposta do provedor com token/segredo embutido) — só o provider e a
     // mensagem já bastam para o dono investigar (SECURITY.md §4).
     const message = context.err instanceof Error ? context.err.message : 'erro desconhecido';
-    this.logger.error({ provider: context.provider, message }, 'alerta de falha de refresh OAuth');
+    await this.dispatch(
+      `refresh_failure:${context.provider}`,
+      () => refreshFailureMessage(context.provider),
+      { provider: context.provider, message },
+    );
   }
 
   async alertAnchorRitualCapped(message: { id: number; jid: string }): Promise<void> {
-    if (!this.config.smtpUrl || !this.config.alertEmail) {
-      this.logger.error({ message }, 'ritual-âncora represado pelo teto diário sem transporte de e-mail configurado');
-      return;
-    }
-    this.logger.error({ message }, 'ritual-âncora (briefing/revisão) represado pelo teto diário de proativas');
+    await this.dispatch(
+      `anchor_ritual_capped:${message.id}`,
+      () => anchorRitualCappedMessage(message),
+      { message },
+    );
+  }
+
+  async alertSessionDown(context: { state: string }): Promise<void> {
+    await this.dispatch(
+      'session_down',
+      () => sessionDownMessage(context.state),
+      { state: context.state },
+    );
+  }
+
+  async alertDiskUsage(context: { usagePercent: number; thresholdPercent: number }): Promise<void> {
+    await this.dispatch(
+      'disk_usage',
+      () => diskUsageMessage(context),
+      { usagePercent: context.usagePercent, thresholdPercent: context.thresholdPercent },
+    );
+  }
+
+  async alertCostBudgetExceeded(context: { projectedMonthlyCostUsd: number; budgetUsd: number }): Promise<void> {
+    await this.dispatch(
+      'cost_budget_exceeded',
+      () => costBudgetExceededMessage(context),
+      { projectedMonthlyCostUsd: context.projectedMonthlyCostUsd, budgetUsd: context.budgetUsd },
+    );
+  }
+
+  async alertCacheRegression(): Promise<void> {
+    await this.dispatch('cache_regression', () => cacheRegressionMessage(), {});
   }
 }

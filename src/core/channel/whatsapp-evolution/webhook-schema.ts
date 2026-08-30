@@ -55,11 +55,27 @@ export const connectionUpdateEventSchema = z.object({
   }),
 });
 
+/**
+ * QRCODE_UPDATED (FEAT-008, RF-13): a Evolution reemite sem `state` — o
+ * corpo real traz o QR code em si (base64/texto), que não interessa ao
+ * produto e não deveria transitar por aqui (payload de terceiro sem uso).
+ * `.passthrough()` porque não validamos o conteúdo, só a ocorrência do evento.
+ */
+export const qrcodeUpdatedEventSchema = z
+  .object({
+    event: z.literal('qrcode.updated'),
+    instance: z.string().min(1),
+    data: z.object({}).passthrough(),
+  })
+  .passthrough();
+
 export const evolutionWebhookSchema = z.discriminatedUnion('event', [
   messagesUpsertEventSchema,
   connectionUpdateEventSchema,
+  qrcodeUpdatedEventSchema,
 ]);
 
 export type EvolutionWebhookPayload = z.infer<typeof evolutionWebhookSchema>;
 export type MessagesUpsertEvent = z.infer<typeof messagesUpsertEventSchema>;
 export type ConnectionUpdateEvent = z.infer<typeof connectionUpdateEventSchema>;
+export type QrcodeUpdatedEvent = z.infer<typeof qrcodeUpdatedEventSchema>;

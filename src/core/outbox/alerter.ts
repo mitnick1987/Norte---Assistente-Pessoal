@@ -11,4 +11,17 @@ export interface FailureAlerter {
    * fora do WhatsApp, nunca só um log warn que ninguém olha.
    */
   alertAnchorRitualCapped: (message: { id: number; jid: string }) => Promise<void>;
+  /** Sessão WhatsApp caída ou pedido de novo QR (FEAT-008, RF-13) — instrução de re-scan, watchdog de sessão. */
+  alertSessionDown: (context: { state: string }) => Promise<void>;
+  /** Uso de disco acima do limiar configurado (FEAT-008, RF-13, best-effort). */
+  alertDiskUsage: (context: { usagePercent: number; thresholdPercent: number }) => Promise<void>;
+  /** Projeção mensal de custo de API acima do orçamento (FEAT-008, RF-15). */
+  alertCostBudgetExceeded: (context: { projectedMonthlyCostUsd: number; budgetUsd: number }) => Promise<void>;
+  /**
+   * Alarme (prioridade mais alta que o de custo, spec item 5) de regressão de
+   * prompt caching — `cache_read_input_tokens = 0` em N chamadas seguidas ao
+   * Sonnet, sinal de que o cache parou de bater e o custo pode multiplicar
+   * 5-10x silenciosamente (ADR-007).
+   */
+  alertCacheRegression: () => Promise<void>;
 }
