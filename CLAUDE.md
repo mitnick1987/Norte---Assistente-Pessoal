@@ -17,7 +17,7 @@ Assistente pessoal para TDAH que mora no WhatsApp: captura sem atrito, lembra na
 - Feature nasce como issue com ID `FEAT-NNN`; bug, com `BUG-NNN`; refactor, com `REF-NNN`. Spec em `docs/features/` antes de codar; branch `feature/*`, `fix/*` ou `refactor/*` a partir de `main`, que é protegida.
 - **Definition of Done:** código + testes passando + doc da feature em `docs/features/` + CHANGELOG atualizado. Sem isso, a entrega não existe.
 - Commits em Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:` — tabela completa no DEVELOPMENT_PROCESS.md §3), mensagens em português, imperativas e curtas.
-- Merge só com OK do dono do projeto, CI verde e reviews resolvidos. Sem exceção: não há autorização de merge automático registrada.
+- **Autorização de merge automático registrada** (dono, 2026-08-25, válida para o M1): PR entra sem OK adicional quando CI está verde e o review multi-agente foi resolvido; specs não aguardam aprovação. Decisão de PRODUTO genuinamente nova (escopo, comportamento visível não previsto no PRD) continua parando no dono.
 - Entre o briefing e o merge, o fluxo é autônomo — inclusive o loop implementa→testa→corrige (workflow `implement-feature`). Não pare para pedir permissão; os pontos legítimos de parada estão no DEVELOPMENT_PROCESS.md §8.
 - Decisão de arquitetura nova → registrar ADR via `/adr` antes de implementar.
 
