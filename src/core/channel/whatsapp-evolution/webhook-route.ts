@@ -205,7 +205,14 @@ export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: Webhoo
 
     // Síncrono e best-effort de propósito: só decide se enfileira o resumo
     // de reentrada (RF-10), nunca deveria derrubar o processamento principal
-    // da mensagem por uma falha aqui.
+    // da mensagem por uma falha aqui. Trade-off aceito (achado de review): o
+    // resumo é one-shot — `checkReentry` decide a partir da mensagem
+    // imediatamente anterior, e uma falha transitória aqui (I/O do SQLite,
+    // parse de timestamp) faz essa janela se perder pra sempre, sem retry —
+    // na próxima mensagem do dono, o gap já não é mais >= 48h. Não há
+    // mecanismo de recuperação hoje; o log é o único rastro. Aceitável
+    // porque é raro (mesma falha transitória que afetaria qualquer leitura
+    // do SQLite) e o valor perdido é só a saudação de reentrada, nunca dado.
     try {
       deps.onInboundRecorded?.(incoming.jid, recorded.messageId);
     } catch (err) {

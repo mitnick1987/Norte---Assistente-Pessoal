@@ -1,3 +1,4 @@
+import { addZonedMonths, toZonedParts, zonedTimeToUtc } from '../../core/scheduler/domain/index.js';
 import type { ItemService } from '../tasks/public/index.js';
 import { buildHygieneMessage, buildHygieneProposal, selectHygieneCandidate, type HygieneProposal } from './domain/index.js';
 
@@ -35,5 +36,17 @@ export class HygieneService {
 
   buildMessage(proposal: HygieneProposal): string {
     return buildHygieneMessage(proposal, proposal.itemId);
+  }
+
+  /**
+   * "3 adiar pra mês que vem" (RF-11, resolução do menu 1/2/3 — achado de
+   * review): recalcula a data no momento da resposta em vez de reusar a
+   * calculada quando a proposta foi montada — mesmo padrão de
+   * `NudgeService.applyReschedule`, que também recalcula ao aplicar, nunca
+   * reaproveita um valor potencialmente antigo de quando a mensagem saiu.
+   */
+  async applyNextMonthSnooze(itemId: number): Promise<void> {
+    const nextMonth = addZonedMonths(toZonedParts(this.now()), 1);
+    await this.deps.itemService.snoozeToDate(itemId, zonedTimeToUtc(nextMonth));
   }
 }

@@ -4,11 +4,13 @@ import type { LlmProvider, LlmUsage, PromptFragmentSource } from '../../core/llm
 import { buildBrainSystemPrompt } from '../../core/llm/index.js';
 import type { JobRepository } from '../../core/scheduler/index.js';
 import type { OutboxRepository } from '../../core/outbox/index.js';
+import type { PendingMenuRepository } from '../../core/menu/index.js';
 import type { ItemService } from '../tasks/public/index.js';
 import type { HygieneService } from '../hygiene/public/index.js';
 import { BriefingService, type RemoteAgendaPort } from './briefing-service.js';
 import { ReviewService } from './review-service.js';
 import { buildRitualJobHandlers } from './job-handlers.js';
+import { buildRitualsCommands } from './commands.js';
 import { BRIEFING_JOB_TYPE, REVISAO_JOB_TYPE, ensureDailyRitualJob } from './job-scheduling.js';
 
 export const BRIEFING_HOUR_SETTING = 'rituals.briefingHour';
@@ -25,6 +27,7 @@ export interface BuildRitualsModuleDeps {
   readonly itemService: ItemService;
   readonly jobRepository: JobRepository;
   readonly outboxRepository: OutboxRepository;
+  readonly pendingMenuRepository: PendingMenuRepository;
   readonly llmProvider: LlmProvider;
   /**
    * Thunk, não lista pronta: assim como em `capture` (mesmo motivo, ver
@@ -81,12 +84,14 @@ export function buildRitualsModule(deps: BuildRitualsModuleDeps): { manifest: Mo
     briefingService,
     reviewService,
     outboxRepository: deps.outboxRepository,
+    pendingMenuRepository: deps.pendingMenuRepository,
     ownerJid: deps.ownerJid,
   });
 
   const manifest: ModuleManifest = {
     name: 'rituals',
     jobs,
+    commands: buildRitualsCommands(deps.itemService, deps.pendingMenuRepository, now),
     settingsDefaults: {
       [BRIEFING_HOUR_SETTING]: BRIEFING_HOUR_DEFAULT,
       [BRIEFING_MINUTE_SETTING]: BRIEFING_MINUTE_DEFAULT,

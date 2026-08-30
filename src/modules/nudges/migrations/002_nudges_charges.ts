@@ -23,7 +23,8 @@ export const nudgesCharges002: Migration = {
         item_id INTEGER NOT NULL,
         charged_on TEXT NOT NULL,
         sent_at TEXT NOT NULL DEFAULT (datetime('now')),
-        responded_at TEXT
+        responded_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
       -- elegibilidade filtra "já cobrei este item hoje?" por item_id + charged_on.

@@ -1,5 +1,6 @@
 import type { JobHandler } from '../../core/kernel/types.js';
 import type { OutboxRepository } from '../../core/outbox/index.js';
+import type { PendingMenuRepository } from '../../core/menu/index.js';
 import type { BriefingService } from './briefing-service.js';
 import type { ReviewService } from './review-service.js';
 
@@ -7,6 +8,7 @@ export interface RitualJobHandlersDeps {
   readonly briefingService: BriefingService;
   readonly reviewService: ReviewService;
   readonly outboxRepository: OutboxRepository;
+  readonly pendingMenuRepository: PendingMenuRepository;
   readonly ownerJid: string;
 }
 
@@ -30,9 +32,16 @@ export function buildRitualJobHandlers(deps: RitualJobHandlersDeps): Record<stri
       deps.outboxRepository.enqueue({ jid: deps.ownerJid, body: message, isProactive: true, isAnchorRitual: true });
     },
     revisao: async () => {
-      const messages = await deps.reviewService.buildMessages();
+      const { messages, pendingDecision } = await deps.reviewService.buildMessages();
       for (const message of messages) {
         deps.outboxRepository.enqueue({ jid: deps.ownerJid, body: message, isProactive: true, isAnchorRitual: true });
+      }
+      // Registra qual foi a última pergunta de menu numérico feita (achado
+      // de review): sem isso, o "1"/"2"/"3" de uma cobrança pendente de mais
+      // cedo sequestra o dígito que era pra resolver contra a decisão desta
+      // revisão/higiene.
+      if (pendingDecision) {
+        deps.pendingMenuRepository.record(pendingDecision.origin, pendingDecision.itemId);
       }
     },
   };

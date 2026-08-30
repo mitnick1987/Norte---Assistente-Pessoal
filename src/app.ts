@@ -14,6 +14,7 @@ import { SettingsStore } from './core/settings/index.js';
 import { JobRepository, Scheduler } from './core/scheduler/index.js';
 import { OutboxRepository, OutboxProcessor } from './core/outbox/index.js';
 import { MessageRepository } from './core/channel/index.js';
+import { PendingMenuRepository } from './core/menu/index.js';
 import {
   EvolutionClient,
   ConnectionWatchdog,
@@ -127,6 +128,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   const jobRepository = new JobRepository(db);
   const outboxRepository = new OutboxRepository(db);
   const messageRepository = new MessageRepository(db);
+  const pendingMenuRepository = new PendingMenuRepository(db);
   const settings = new SettingsStore(db);
 
   // chains nasce antes de capture: a captura de compromisso chama
@@ -242,6 +244,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
 
   const { manifest: hygieneManifest, service: hygieneService } = buildHygieneModule({
     itemService,
+    pendingMenuRepository,
     ...(overrides.now ? { now: overrides.now } : {}),
   });
 
@@ -253,10 +256,12 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     db,
     itemService,
     outboxRepository,
+    pendingMenuRepository,
     returnModeService,
     ownerJid: env.OWNER_WHATSAPP_JID,
     logger,
     getDailyChargeCap: () => Number(settings.get<number>(NUDGES_DAILY_CHARGE_CAP_SETTING) ?? 3),
+    getDailyProactiveCap: () => env.DAILY_PROACTIVE_CAP,
     getFallbackSnoozeHour: () => Number(settings.get<number>(NUDGES_FALLBACK_SNOOZE_HOUR_SETTING) ?? 9),
     getFallbackSnoozeMinute: () => Number(settings.get<number>(NUDGES_FALLBACK_SNOOZE_MINUTE_SETTING) ?? 0),
     ...(overrides.now ? { now: overrides.now } : {}),
@@ -268,6 +273,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     itemService,
     jobRepository,
     outboxRepository,
+    pendingMenuRepository,
     llmProvider,
     getActiveModules: () => registry.getModules(),
     ownerJid: env.OWNER_WHATSAPP_JID,

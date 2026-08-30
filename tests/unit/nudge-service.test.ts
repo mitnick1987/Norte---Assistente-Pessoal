@@ -8,6 +8,7 @@ import { ItemsRepository } from '../../src/modules/tasks/items-repository.js';
 import { ItemService } from '../../src/modules/tasks/item-service.js';
 import { OutboxRepository } from '../../src/core/outbox/index.js';
 import { MessageRepository } from '../../src/core/channel/index.js';
+import { PendingMenuRepository } from '../../src/core/menu/index.js';
 import { ChargesRepository } from '../../src/modules/nudges/charges-repository.js';
 import { PatternsRepository } from '../../src/modules/nudges/patterns-repository.js';
 import { NudgeService } from '../../src/modules/nudges/nudge-service.js';
@@ -23,6 +24,7 @@ function buildContext(now: Date) {
   const itemService = new ItemService(new ItemsRepository(db), () => now);
   const outboxRepository = new OutboxRepository(db);
   const messageRepository = new MessageRepository(db);
+  const pendingMenuRepository = new PendingMenuRepository(db);
   const chargesRepository = new ChargesRepository(db);
   const patternsRepository = new PatternsRepository(db);
   const returnModeService = new ReturnModeService({ messageRepository, itemService, now: () => now });
@@ -32,16 +34,18 @@ function buildContext(now: Date) {
     chargesRepository,
     patternsRepository,
     outboxRepository,
+    pendingMenuRepository,
     returnModeService,
     ownerJid: OWNER_JID,
     logger: noopLogger,
     getDailyChargeCap: () => 3,
+    getDailyProactiveCap: () => 6,
     getFallbackSnoozeHour: () => 9,
     getFallbackSnoozeMinute: () => 0,
     now: () => now,
   });
 
-  return { db, itemService, outboxRepository, chargesRepository, patternsRepository, service };
+  return { db, itemService, outboxRepository, pendingMenuRepository, chargesRepository, patternsRepository, service };
 }
 
 describe('NudgeService.checkAndSendDue (RF-08, fechamento de loop)', () => {
@@ -97,6 +101,66 @@ describe('NudgeService.checkAndSendDue (RF-08, fechamento de loop)', () => {
     await service.checkAndSendDue();
 
     expect(outboxRepository.findPending(now.toISOString())).toHaveLength(0);
+  });
+
+  /**
+   * Achado de review (security-auditor): a cobrança gravava `nudges_charges`
+   * e marcava o item como "cobrado hoje" mesmo quando o teto GLOBAL de
+   * proativas do outbox (`DAILY_PROACTIVE_CAP`, compartilhado com
+   * briefing/revisão/lembretes) já estava esgotado — a mensagem nunca saía
+   * (represada pelo `OutboxProcessor`), mas o item sumia da cobrança pelo
+   * resto do dia como se tivesse sido cobrado de verdade.
+   */
+  it('teto GLOBAL de proativas do outbox já esgotado: item não é gravado em nudges_charges nem enfileirado', async () => {
+    const now = new Date('2026-08-30T15:00:00.000Z');
+    const db = new Database(':memory:');
+    runMigrations(db, [...coreMigrations, ...tasksMigrations, ...nudgesMigrations]);
+
+    const itemService = new ItemService(new ItemsRepository(db), () => now);
+    const outboxRepository = new OutboxRepository(db);
+    const messageRepository = new MessageRepository(db);
+    const pendingMenuRepository = new PendingMenuRepository(db);
+    const chargesRepository = new ChargesRepository(db);
+    const patternsRepository = new PatternsRepository(db);
+    const returnModeService = new ReturnModeService({ messageRepository, itemService, now: () => now });
+
+    // simula o teto global já consumido por outras proativas do dia
+    // (briefing/revisão/lembretes) — teto de 1, já ocupado.
+    outboxRepository.enqueue({ jid: OWNER_JID, body: 'briefing de hoje', isProactive: true, isAnchorRitual: true });
+
+    const service = new NudgeService({
+      itemService,
+      chargesRepository,
+      patternsRepository,
+      outboxRepository,
+      pendingMenuRepository,
+      returnModeService,
+      ownerJid: OWNER_JID,
+      logger: noopLogger,
+      getDailyChargeCap: () => 3,
+      getDailyProactiveCap: () => 1, // teto global mais apertado que o de cobrança
+      getFallbackSnoozeHour: () => 9,
+      getFallbackSnoozeMinute: () => 0,
+      now: () => now,
+    });
+
+    const item = itemService.create({
+      type: 'tarefa',
+      title: 'pagar boleto',
+      origin: 'texto',
+      dueAt: new Date('2026-08-30T10:00:00.000Z'),
+    });
+
+    await service.checkAndSendDue();
+
+    // nenhuma cobrança nova enfileirada (só o briefing que já estava lá).
+    const chargeMessages = db.prepare(`SELECT COUNT(*) as c FROM outbox_messages WHERE body LIKE '%dropar%'`).get() as { c: number };
+    expect(chargeMessages.c).toBe(0);
+
+    // nenhuma linha gravada em nudges_charges — o item não "gastou" a cota
+    // de cobrança do dia por uma mensagem que nunca vai sair.
+    expect(chargesRepository.countChargedOn('2026-08-30')).toBe(0);
+    expect(chargesRepository.findItemIdsChargedOn('2026-08-30').has(item.id)).toBe(false);
   });
 });
 

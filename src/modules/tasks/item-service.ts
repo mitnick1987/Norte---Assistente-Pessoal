@@ -86,6 +86,11 @@ export class ItemService {
     return item;
   }
 
+  /** Leitura sem lançar (RF-08, achado de review): quem precisa checar o status atual antes de decidir uma ação — nunca assumir que o item ainda está no estado esperado. */
+  findById(id: number): ItemRecord | undefined {
+    return this.repository.findById(id);
+  }
+
   complete(id: number): ItemRecord {
     const item = this.getOrThrow(id);
     assertTransition(item.status, 'feita');

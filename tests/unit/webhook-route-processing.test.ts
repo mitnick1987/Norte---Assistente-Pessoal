@@ -39,6 +39,7 @@ function audioPayload(waMessageId: string) {
 function buildFastify(
   onUnmatchedText: (text: string, jid: string, messageId: number) => Promise<void>,
   onAudioMessage?: AudioMessageHandler,
+  onInboundRecorded?: (jid: string, messageId: number) => void,
 ) {
   const db = new Database(':memory:');
   runMigrations(db, coreMigrations);
@@ -60,6 +61,7 @@ function buildFastify(
     logger,
     onUnmatchedText,
     ...(onAudioMessage ? { onAudioMessage } : {}),
+    ...(onInboundRecorded ? { onInboundRecorded } : {}),
   });
 
   return { fastify, db, messageRepository, errorSpy };
@@ -229,5 +231,64 @@ describe('registro do webhook: ACK imediato + processamento em background (ADR-0
       expect.objectContaining({ waMessageId: 'wa-audio-3' }),
       expect.stringContaining('falha ao processar áudio'),
     );
+  });
+
+  /**
+   * Achado de review (RF-10, modo retorno): `onInboundRecorded` é
+   * síncrono e best-effort de propósito (nunca deveria derrubar o
+   * processamento principal), mas uma falha transitória aqui não podia
+   * passar batido sem log — o resumo de reentrada é one-shot, e sem log
+   * a perda seria completamente silenciosa.
+   */
+  it('onInboundRecorded lançando exceção é logado como erro e não impede o processamento principal (best-effort)', async () => {
+    const onUnmatchedText = vi.fn(async () => undefined);
+    const onInboundRecorded = vi.fn(() => {
+      throw new Error('falha transitória no cálculo de reentrada');
+    });
+    const ctx = buildFastify(onUnmatchedText, undefined, onInboundRecorded);
+    fastify = ctx.fastify;
+    db = ctx.db;
+
+    const response = await ctx.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: textPayload('wa-1', 'texto qualquer'),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(onInboundRecorded).toHaveBeenCalledTimes(1);
+
+    // erro logado, com o messageId pra rastreio.
+    expect(ctx.errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: expect.any(Number) }),
+      expect.stringContaining('modo retorno'),
+    );
+
+    // processamento principal segue normalmente apesar da falha no hook.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onUnmatchedText).toHaveBeenCalledTimes(1);
+    const row = ctx.db.prepare(`SELECT processing_status FROM messages WHERE wa_message_id = 'wa-1'`).get() as {
+      processing_status: string;
+    };
+    expect(row.processing_status).toBe('processed');
+  });
+
+  it('onInboundRecorded bem-sucedido não gera log de erro', async () => {
+    const onUnmatchedText = vi.fn(async () => undefined);
+    const onInboundRecorded = vi.fn(() => undefined);
+    const ctx = buildFastify(onUnmatchedText, undefined, onInboundRecorded);
+    fastify = ctx.fastify;
+    db = ctx.db;
+
+    await ctx.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: textPayload('wa-1', 'texto qualquer'),
+    });
+
+    expect(onInboundRecorded).toHaveBeenCalledTimes(1);
+    expect(ctx.errorSpy).not.toHaveBeenCalled();
   });
 });

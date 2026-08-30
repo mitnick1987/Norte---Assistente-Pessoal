@@ -8,6 +8,7 @@ import { ItemsRepository } from '../../src/modules/tasks/items-repository.js';
 import { ItemService } from '../../src/modules/tasks/item-service.js';
 import { OutboxRepository } from '../../src/core/outbox/index.js';
 import { MessageRepository } from '../../src/core/channel/index.js';
+import { PendingMenuRepository } from '../../src/core/menu/index.js';
 import { ChargesRepository } from '../../src/modules/nudges/charges-repository.js';
 import { PatternsRepository } from '../../src/modules/nudges/patterns-repository.js';
 import { NudgeService } from '../../src/modules/nudges/nudge-service.js';
@@ -25,23 +26,26 @@ function buildContext() {
   const itemService = new ItemService(new ItemsRepository(db), () => NOW);
   const outboxRepository = new OutboxRepository(db);
   const messageRepository = new MessageRepository(db);
+  const pendingMenuRepository = new PendingMenuRepository(db);
   const returnModeService = new ReturnModeService({ messageRepository, itemService, now: () => NOW });
   const nudgeService = new NudgeService({
     itemService,
     chargesRepository: new ChargesRepository(db),
     patternsRepository: new PatternsRepository(db),
     outboxRepository,
+    pendingMenuRepository,
     returnModeService,
     ownerJid: OWNER_JID,
     logger: noopLogger,
     getDailyChargeCap: () => 3,
+    getDailyProactiveCap: () => 6,
     getFallbackSnoozeHour: () => 9,
     getFallbackSnoozeMinute: () => 0,
     now: () => NOW,
   });
 
   const commands = buildNudgesCommands(itemService, nudgeService);
-  return { db, itemService, nudgeService, commands };
+  return { db, itemService, pendingMenuRepository, nudgeService, commands };
 }
 
 function findCommand(commands: ReturnType<typeof buildNudgesCommands>, name: string) {
@@ -113,5 +117,92 @@ describe('comandos de resposta à cobrança (RF-08, menu 1/2/3)', () => {
     await completeCommand.handle({ text: '1', ownerJid: OWNER_JID });
 
     expect(completeCommand.match({ text: '1', ownerJid: OWNER_JID })).toBe(false);
+  });
+
+  /**
+   * Achado de review (security-auditor): o item cobrado pode virar terminal
+   * por outro caminho (linguagem natural, brain) ANTES da resposta numérica
+   * chegar. Sem a checagem de estado terminal, `itemService.complete`
+   * lançava `InvalidStatusTransitionError`, a exceção subia até o `.catch` do
+   * webhook (mensagem marcada `failed`, dono sem resposta) e o charge nunca
+   * era marcado como respondido — travando o menu 1/2/3 pra sempre (
+   * `findMostRecentPending` continuava devolvendo o mesmo charge morto).
+   */
+  it('item cobrado já em estado terminal (feita) antes da resposta chegar: "1" resolve graciosamente, sem lançar', async () => {
+    const { itemService, nudgeService, commands } = buildContext();
+    const item = itemService.create({
+      type: 'tarefa',
+      title: 'pagar boleto',
+      origin: 'texto',
+      dueAt: new Date('2026-08-30T10:00:00.000Z'),
+    });
+    await nudgeService.checkAndSendDue();
+
+    // corrida: o dono completa o item por outro caminho (linguagem natural)
+    // antes de responder "1" à cobrança.
+    itemService.complete(item.id);
+
+    const command = findCommand(commands, 'nudges.charge.complete');
+    expect(command.match({ text: '1', ownerJid: OWNER_JID })).toBe(true);
+
+    const result = await command.handle({ text: '1', ownerJid: OWNER_JID });
+
+    expect(result.replyText).toBeTruthy();
+    expect(result.replyText.toLowerCase()).not.toMatch(/erro|falha|exception/);
+  });
+
+  it('item cobrado já em estado terminal: a cobrança é encerrada (não trava o menu 1/2/3 pra sempre)', async () => {
+    const { itemService, nudgeService, commands } = buildContext();
+    const item = itemService.create({
+      type: 'tarefa',
+      title: 'pagar boleto',
+      origin: 'texto',
+      dueAt: new Date('2026-08-30T10:00:00.000Z'),
+    });
+    await nudgeService.checkAndSendDue();
+    itemService.complete(item.id);
+
+    const completeCommand = findCommand(commands, 'nudges.charge.complete');
+    await completeCommand.handle({ text: '1', ownerJid: OWNER_JID });
+
+    // charge foi encerrado — "1" não bate mais (nenhum menu 1/2/3 fica preso
+    // resolvendo pra sempre contra um item terminal).
+    expect(completeCommand.match({ text: '1', ownerJid: OWNER_JID })).toBe(false);
+  });
+
+  it('item cobrado já dropado antes da resposta chegar: "3" (dropar de novo) resolve graciosamente, sem lançar', async () => {
+    const { itemService, nudgeService, commands } = buildContext();
+    const item = itemService.create({
+      type: 'tarefa',
+      title: 'pagar boleto',
+      origin: 'texto',
+      dueAt: new Date('2026-08-30T10:00:00.000Z'),
+    });
+    await nudgeService.checkAndSendDue();
+    await itemService.drop(item.id);
+
+    const command = findCommand(commands, 'nudges.charge.drop');
+    const result = await command.handle({ text: '3', ownerJid: OWNER_JID });
+
+    expect(result.replyText).toBeTruthy();
+  });
+
+  it('item cobrado já em estado terminal: "2" (reagendar) resolve graciosamente, nunca tenta aplicar snooze num item terminal', async () => {
+    const { itemService, nudgeService, commands } = buildContext();
+    const item = itemService.create({
+      type: 'tarefa',
+      title: 'pagar boleto',
+      origin: 'texto',
+      dueAt: new Date('2026-08-30T10:00:00.000Z'),
+    });
+    await nudgeService.checkAndSendDue();
+    itemService.complete(item.id);
+
+    const command = findCommand(commands, 'nudges.charge.reschedule');
+    const result = await command.handle({ text: '2', ownerJid: OWNER_JID });
+
+    expect(result.replyText).toBeTruthy();
+    const row = itemService.findById(item.id);
+    expect(row?.status).toBe('feita'); // nunca virou "adiada" por cima do estado terminal
   });
 });

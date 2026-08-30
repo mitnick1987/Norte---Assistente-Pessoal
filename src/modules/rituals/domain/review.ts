@@ -27,6 +27,8 @@ export interface ReviewData {
    * "no máximo uma decisão" por revisão).
    */
   readonly hygieneMessage: string | undefined;
+  /** Item ao qual `hygieneMessage` se refere (achado de review) — o job handler registra em `pending_menus` para o "1/2/3" da higiene resolver contra o item certo. */
+  readonly hygieneItemId: number | undefined;
 }
 
 /**
@@ -49,12 +51,14 @@ export function buildReviewData(
   rescheduledToTomorrow: readonly ReviewRescheduledEntry[],
   eligibleForDecision: readonly PrioritizableItem[],
   hygieneMessage?: string,
+  hygieneItemId?: number,
 ): ReviewData {
   return {
     completedToday,
     rescheduledToTomorrow,
     decisionRequested: selectReviewDecisionCandidate(eligibleForDecision),
     hygieneMessage,
+    hygieneItemId,
   };
 }
 

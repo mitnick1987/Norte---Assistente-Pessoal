@@ -141,4 +141,54 @@ describe('OutboxRepository', () => {
 
     expect(pending.map((m) => m.id)).toEqual([first, second]);
   });
+
+  /**
+   * Achado de review (FEAT-007): `countProactiveCommittedSince` existe para
+   * um chamador (nudges) decidir "ainda cabe no teto?" ANTES do processor
+   * confirmar a entrega — precisa contar pending/sending/delivered, nunca só
+   * delivered (senão subestima o consumo do dia).
+   */
+  describe('countProactiveCommittedSince (achado de review, FEAT-007)', () => {
+    it('conta pending, sending e delivered — nunca failed', () => {
+      const { repository } = buildRepository();
+      const nowIso = new Date().toISOString();
+
+      repository.enqueue({ jid: 'jid-1', body: 'pending', isProactive: true });
+      const sendingId = repository.enqueue({ jid: 'jid-1', body: 'sending', isProactive: true });
+      repository.claimForSending(sendingId);
+      const deliveredId = repository.enqueue({ jid: 'jid-1', body: 'delivered', isProactive: true });
+      repository.markDelivered(deliveredId, new Date());
+      const failedId = repository.enqueue({ jid: 'jid-1', body: 'failed', isProactive: true });
+      repository.markFailed(failedId);
+
+      expect(repository.countProactiveCommittedSince(nowIso)).toBe(3);
+    });
+
+    it('nunca conta mensagem não-proativa', () => {
+      const { repository } = buildRepository();
+      const nowIso = new Date().toISOString();
+
+      repository.enqueue({ jid: 'jid-1', body: 'resposta a comando', isProactive: false });
+
+      expect(repository.countProactiveCommittedSince(nowIso)).toBe(0);
+    });
+
+    /**
+     * Regressão: `created_at` é preenchido por `DEFAULT (datetime('now'))`
+     * do SQLite (`YYYY-MM-DD HH:MM:SS`, sem "T"/"Z"), mas `sinceIso` chega em
+     * formato ISO (`YYYY-MM-DDTHH:MM:SS.sssZ`) — uma comparação de string
+     * `>=` crua entre os dois formatos falha silenciosamente (o espaço do
+     * primeiro formato ordena antes do "T" do segundo), fazendo o método
+     * subestimar o teto mesmo com a mensagem gravada há poucos segundos.
+     */
+    it('conta mensagem enfileirada agora comparando contra sinceIso do início do dia (formatos de data diferentes)', () => {
+      const { repository } = buildRepository();
+
+      repository.enqueue({ jid: 'jid-1', body: 'briefing de hoje', isProactive: true, isAnchorRitual: true });
+
+      const startOfTodayIso = zonedTimeToUtc(startOfZonedDay(new Date())).toISOString();
+
+      expect(repository.countProactiveCommittedSince(startOfTodayIso)).toBe(1);
+    });
+  });
 });

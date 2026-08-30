@@ -69,6 +69,8 @@ export class ChargesRepository {
   }
 
   markResponded(id: number, respondedAt: Date): void {
-    this.db.prepare(`UPDATE nudges_charges SET responded_at = ? WHERE id = ?`).run(respondedAt.toISOString(), id);
+    this.db
+      .prepare(`UPDATE nudges_charges SET responded_at = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(respondedAt.toISOString(), id);
   }
 }

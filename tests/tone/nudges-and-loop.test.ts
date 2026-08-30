@@ -8,6 +8,7 @@ import { ItemsRepository } from '../../src/modules/tasks/items-repository.js';
 import { ItemService } from '../../src/modules/tasks/item-service.js';
 import { OutboxRepository } from '../../src/core/outbox/index.js';
 import { MessageRepository } from '../../src/core/channel/index.js';
+import { PendingMenuRepository } from '../../src/core/menu/index.js';
 import { ChargesRepository } from '../../src/modules/nudges/charges-repository.js';
 import { PatternsRepository } from '../../src/modules/nudges/patterns-repository.js';
 import { NudgeService } from '../../src/modules/nudges/nudge-service.js';
@@ -101,6 +102,7 @@ describe('cenário: 48h de silêncio com múltiplos itens vencidos gera NO MÁXI
     const itemService = new ItemService(new ItemsRepository(db), () => new Date('2026-08-25T12:00:00.000Z'));
     const outboxRepository = new OutboxRepository(db);
     const messageRepository = new MessageRepository(db);
+    const pendingMenuRepository = new PendingMenuRepository(db);
     const chargesRepository = new ChargesRepository(db);
     const patternsRepository = new PatternsRepository(db);
 
@@ -124,10 +126,12 @@ describe('cenário: 48h de silêncio com múltiplos itens vencidos gera NO MÁXI
       chargesRepository,
       patternsRepository,
       outboxRepository,
+      pendingMenuRepository,
       returnModeService: returnModeServiceDuringSilence,
       ownerJid: OWNER_JID,
       logger: noopLogger,
       getDailyChargeCap: () => 3,
+      getDailyProactiveCap: () => 6,
       getFallbackSnoozeHour: () => 9,
       getFallbackSnoozeMinute: () => 0,
       now: () => duringSilenceNow,

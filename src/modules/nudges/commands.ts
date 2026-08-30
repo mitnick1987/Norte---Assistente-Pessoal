@@ -9,8 +9,12 @@ import type { NudgeService } from './nudge-service.js';
  * pode ter sido capturado depois da cobrança sair, e a resposta numérica é
  * sempre sobre o que foi cobrado, não sobre o que veio depois.
  *
- * Sem cobrança pendente, "1"/"2"/"3" solto não bate aqui — cai em conversa
- * como qualquer texto não reconhecido (comportamento já existente).
+ * `findPendingChargeItemId` já filtra por `pending_menus` (achado de
+ * review): só resolve aqui se a cobrança também for a ÚLTIMA pergunta de
+ * menu numérico feita — uma cobrança da manhã sem resposta nunca sequestra o
+ * dígito de um menu de revisão/higiene emitido depois. Sem cobrança pendente
+ * (ou com outra origem na frente), "1"/"2"/"3" solto não bate aqui — cai em
+ * conversa como qualquer texto não reconhecido.
  */
 
 function normalize(text: string): string {
@@ -30,6 +34,15 @@ function buildChargeCommand(
       const itemId = nudgeService.findPendingChargeItemId();
       if (itemId === undefined) {
         return { replyText: 'Não achei nenhuma cobrança pendente pra responder.' };
+      }
+
+      // Item já em estado terminal (feita/dropada/arquivada) antes da
+      // resposta chegar — corrida com outro caminho que fechou o item
+      // primeiro (achado de review). Encerra a cobrança sem lançar: nenhuma
+      // transição inválida, resposta neutra, o item já está resolvido.
+      if (nudgeService.isChargedItemTerminal(itemId)) {
+        nudgeService.recordResponse();
+        return { replyText: 'Essa já tinha sido resolvida antes — nada pra fazer aqui.' };
       }
 
       if (digit === '1') {

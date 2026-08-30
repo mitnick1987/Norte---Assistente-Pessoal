@@ -2,6 +2,7 @@ import type { Database } from 'better-sqlite3';
 import type { Logger } from 'pino';
 import type { ModuleManifest } from '../../core/kernel/types.js';
 import type { OutboxRepository } from '../../core/outbox/index.js';
+import type { PendingMenuRepository } from '../../core/menu/index.js';
 import type { ItemService } from '../tasks/public/index.js';
 import type { ReturnModeService } from '../return-mode/public/index.js';
 import { ChargesRepository } from './charges-repository.js';
@@ -29,10 +30,13 @@ export interface BuildNudgesModuleDeps {
   readonly db: Database;
   readonly itemService: ItemService;
   readonly outboxRepository: OutboxRepository;
+  readonly pendingMenuRepository: PendingMenuRepository;
   readonly returnModeService: ReturnModeService;
   readonly ownerJid: string;
   readonly logger: Logger;
   readonly getDailyChargeCap: () => number;
+  /** Teto GLOBAL de proativas do outbox (achado de review): a cobrança só é contabilizada quando ainda cabe nele, nunca só no teto próprio de cobrança. */
+  readonly getDailyProactiveCap: () => number;
   readonly getFallbackSnoozeHour: () => number;
   readonly getFallbackSnoozeMinute: () => number;
   now?: () => Date;
@@ -53,10 +57,12 @@ export function buildNudgesModule(deps: BuildNudgesModuleDeps): { manifest: Modu
     chargesRepository,
     patternsRepository,
     outboxRepository: deps.outboxRepository,
+    pendingMenuRepository: deps.pendingMenuRepository,
     returnModeService: deps.returnModeService,
     ownerJid: deps.ownerJid,
     logger: deps.logger,
     getDailyChargeCap: deps.getDailyChargeCap,
+    getDailyProactiveCap: deps.getDailyProactiveCap,
     getFallbackSnoozeHour: deps.getFallbackSnoozeHour,
     getFallbackSnoozeMinute: deps.getFallbackSnoozeMinute,
     ...(deps.now ? { now: deps.now } : {}),

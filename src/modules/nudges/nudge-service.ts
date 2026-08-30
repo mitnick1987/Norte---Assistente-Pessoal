@@ -1,7 +1,9 @@
 import type { Logger } from 'pino';
 import type { OutboxRepository } from '../../core/outbox/index.js';
+import { proactiveCapReached } from '../../core/outbox/domain/index.js';
 import { startOfZonedDay, toZonedParts, zonedTimeToUtc } from '../../core/scheduler/domain/index.js';
-import { selectTopPriorities, type ItemService } from '../tasks/public/index.js';
+import type { PendingMenuRepository } from '../../core/menu/index.js';
+import { canTransition, selectTopPriorities, type ItemService } from '../tasks/public/index.js';
 import type { ReturnModeService } from '../return-mode/public/index.js';
 import {
   buildChargeMessage,
@@ -21,10 +23,12 @@ export interface NudgeServiceDeps {
   readonly chargesRepository: ChargesRepository;
   readonly patternsRepository: PatternsRepository;
   readonly outboxRepository: OutboxRepository;
+  readonly pendingMenuRepository: PendingMenuRepository;
   readonly returnModeService: ReturnModeService;
   readonly ownerJid: string;
   readonly logger: Logger;
   readonly getDailyChargeCap: () => number;
+  readonly getDailyProactiveCap: () => number;
   readonly getFallbackSnoozeHour: () => number;
   readonly getFallbackSnoozeMinute: () => number;
   now?: () => Date;
@@ -104,27 +108,72 @@ export class NudgeService {
       this.deps.logger.info({ count: eligible.length, returnModeSuppressed }, 'cobrança: itens elegíveis nesta checagem');
     }
 
+    // Teto GLOBAL do outbox (achado de review): gravar `nudges_charges` e
+    // consumir a cota de cobrança só quando o envio de fato tem chance de
+    // sair — nunca quando o outbox já vai reprimir por causa do teto geral
+    // de proativas. Sem isso, um dia cheio (briefing+revisão+lembretes já no
+    // teto) faz a cobrança "gastar" um item do dia sem o dono nunca ver a
+    // mensagem (`sent_at` gravado, envio nunca entregue). O orçamento é
+    // reavaliado a cada iteração porque cada `enqueue` bem-sucedido consome 1
+    // vaga do mesmo teto que os outros itens deste lote também disputam.
+    const sinceIso = zonedTimeToUtc(startOfZonedDay(now)).toISOString();
+    const dailyProactiveCap = this.deps.getDailyProactiveCap();
+
     for (const item of eligible) {
+      const committedToday = this.deps.outboxRepository.countProactiveCommittedSince(sinceIso);
+      if (proactiveCapReached(committedToday, dailyProactiveCap)) {
+        this.deps.logger.warn(
+          { itemId: item.id },
+          'cobrança: teto geral de proativas do outbox atingido, item não cobrado nem contabilizado',
+        );
+        break;
+      }
+
       this.deps.chargesRepository.record(item.id, dayKey);
       this.deps.outboxRepository.enqueue({
         jid: this.deps.ownerJid,
         body: buildChargeMessage(item),
         isProactive: true,
       });
+      this.deps.pendingMenuRepository.record('cobranca', item.id);
     }
   }
 
   /**
    * Resolve "1"/"2"/"3" sobre a cobrança mais recente ainda sem resposta
-   * (RF-08). `undefined` quando não há cobrança pendente — quem chama
-   * decide a resposta honesta (nunca inventa qual item).
+   * (RF-08) — mas só quando ela também é a ÚLTIMA pergunta de menu numérico
+   * feita (`pending_menus`, achado de review). Uma cobrança da manhã sem
+   * resposta não pode "sequestrar" o dígito de um menu de revisão/higiene
+   * emitido depois: se a pergunta mais recente é de outra origem, não há
+   * cobrança pendente PARA FINS DESTE MENU, mesmo que exista uma linha
+   * `nudges_charges` com `responded_at IS NULL` por trás. `undefined` nos
+   * dois casos — quem chama decide a resposta honesta (nunca inventa item).
    */
   findPendingChargeItemId(): number | undefined {
-    return this.deps.chargesRepository.findMostRecentPending()?.itemId;
+    const pendingMenu = this.deps.pendingMenuRepository.findMostRecentPending();
+    if (!pendingMenu || pendingMenu.origin !== 'cobranca') return undefined;
+
+    return pendingMenu.itemId;
+  }
+
+  /**
+   * Item cobrado já em estado terminal (feita/dropada/arquivada) antes da
+   * resposta chegar — corrida com o executor de linguagem natural ou outro
+   * caminho que fechou o item primeiro (achado de review). Resolve a
+   * cobrança sem lançar: encerra o menu como respondido, sem aplicar
+   * nenhuma transição nem mensagem de "erro" — o item já está resolvido.
+   */
+  isChargedItemTerminal(itemId: number): boolean {
+    const item = this.deps.itemService.findById(itemId);
+    if (!item) return true;
+    return !canTransition(item.status, 'feita') && !canTransition(item.status, 'dropada') && !canTransition(item.status, 'adiada');
   }
 
   /** Marca a cobrança pendente como respondida e registra a amostra de horário em `patterns` (spec item 5) — chamado pelos 3 comandos, sempre. */
   recordResponse(): void {
+    const pendingMenu = this.deps.pendingMenuRepository.findMostRecentPending();
+    if (pendingMenu) this.deps.pendingMenuRepository.markResolved(pendingMenu.id, this.now());
+
     const pending = this.deps.chargesRepository.findMostRecentPending();
     if (!pending) return;
 

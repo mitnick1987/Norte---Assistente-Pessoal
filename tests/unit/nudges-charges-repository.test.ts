@@ -58,4 +58,20 @@ describe('ChargesRepository', () => {
     };
     expect(row.responded_at).not.toBeNull();
   });
+
+  it('markResponded também atualiza updated_at (CODE_STYLE §6)', () => {
+    const { db, repository } = buildRepository();
+    const id = repository.record(1, '2026-08-30');
+    const createdRow = db.prepare('SELECT updated_at FROM nudges_charges WHERE id = ?').get(id) as { updated_at: string };
+
+    repository.markResponded(id, new Date('2026-08-30T15:00:00.000Z'));
+
+    const respondedRow = db.prepare('SELECT updated_at, responded_at FROM nudges_charges WHERE id = ?').get(id) as {
+      updated_at: string;
+      responded_at: string;
+    };
+    expect(respondedRow.responded_at).not.toBeNull();
+    expect(respondedRow.updated_at).toBeTruthy();
+    expect(createdRow.updated_at).toBeTruthy();
+  });
 });

@@ -52,4 +52,19 @@ describe('migrações do módulo nudges (RF-08, FEAT-007)', () => {
     };
     expect(row.responded_at).toBeNull();
   });
+
+  /** CODE_STYLE §6 (achado de review): timestamps created_at/updated_at em todas as tabelas do módulo. */
+  it('patterns e nudges_charges têm updated_at preenchido por padrão no INSERT (CODE_STYLE §6)', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, nudgesMigrations);
+
+    db.prepare(`INSERT INTO patterns (metrica, valor) VALUES ('janela_resposta_habitual', '{}')`).run();
+    db.prepare(`INSERT INTO nudges_charges (item_id, charged_on) VALUES (1, '2026-08-30')`).run();
+
+    const patternsRow = db.prepare('SELECT updated_at FROM patterns LIMIT 1').get() as { updated_at: string | null };
+    const chargesRow = db.prepare('SELECT updated_at FROM nudges_charges LIMIT 1').get() as { updated_at: string | null };
+
+    expect(patternsRow.updated_at).toBeTruthy();
+    expect(chargesRow.updated_at).toBeTruthy();
+  });
 });

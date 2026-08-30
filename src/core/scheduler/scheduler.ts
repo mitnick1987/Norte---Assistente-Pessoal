@@ -63,11 +63,11 @@ export class Scheduler {
     }
 
     this.deps.repository.markRunning(jobId);
+    const recurrence = parseRecurrence(row.recurrence);
 
     try {
       await handler({ jobId, payload: JSON.parse(row.payload) });
 
-      const recurrence = parseRecurrence(row.recurrence);
       if (recurrence) {
         const next = nextOccurrence(this.now(), recurrence);
         this.deps.repository.rescheduleRecurring(jobId, next);
@@ -75,6 +75,18 @@ export class Scheduler {
     } catch (err) {
       this.deps.repository.incrementAttempts(jobId);
       this.deps.logger.error({ jobId, err }, 'falha ao executar job');
+
+      // Job recorrente não pode morrer preso em 'running' por uma exceção
+      // isolada (ADR-004): sem isso, 'cobranca' e qualquer outro job `every`
+      // param de vez até um restart, porque `findPending` só enxerga
+      // 'pending'. Reagenda a próxima ocorrência mesmo em falha — uma
+      // execução ruim vira log de erro, nunca interrompe a recorrência.
+      if (recurrence) {
+        const next = nextOccurrence(this.now(), recurrence);
+        this.deps.repository.rescheduleRecurring(jobId, next);
+        return;
+      }
+
       throw err;
     }
   }

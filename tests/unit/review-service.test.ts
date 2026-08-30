@@ -4,7 +4,9 @@ import { REVIEW_MAX_MESSAGES } from '../../src/modules/rituals/domain/index.js';
 import { LlmRequestError } from '../../src/core/llm/index.js';
 import type { LlmProvider } from '../../src/core/llm/index.js';
 import type { ItemService } from '../../src/modules/tasks/public/index.js';
+import type { HygieneService } from '../../src/modules/hygiene/public/index.js';
 import { createLogger } from '../../src/core/logger.js';
+import { assertToneIsSafe } from '../tone/forbidden-patterns.js';
 
 const logger = createLogger('test');
 const FIXED_NOW = new Date('2026-08-30T23:00:00.000Z'); // 20h America/Sao_Paulo
@@ -50,7 +52,7 @@ describe('ReviewService.buildMessages (spec FEAT-006 item 6)', () => {
       now: () => FIXED_NOW,
     });
 
-    const messages = await service.buildMessages();
+    const { messages } = await service.buildMessages();
 
     expect(messages).toEqual(['Fechou bem hoje.', 'Amanhã segue tranquilo.', 'Sobre a academia: manter ou dropar?']);
   });
@@ -69,7 +71,7 @@ describe('ReviewService.buildMessages (spec FEAT-006 item 6)', () => {
       now: () => FIXED_NOW,
     });
 
-    const messages = await service.buildMessages();
+    const { messages } = await service.buildMessages();
 
     expect(messages).toHaveLength(REVIEW_MAX_MESSAGES);
     expect(messages).toEqual(['um.', 'dois.', 'três.']);
@@ -89,7 +91,7 @@ describe('ReviewService.buildMessages (spec FEAT-006 item 6)', () => {
       now: () => FIXED_NOW,
     });
 
-    const messages = await service.buildMessages();
+    const { messages } = await service.buildMessages();
 
     expect(messages.length).toBeGreaterThan(0);
     expect(messages.join(' ')).toContain('academia');
@@ -109,7 +111,7 @@ describe('ReviewService.buildMessages (spec FEAT-006 item 6)', () => {
       now: () => FIXED_NOW,
     });
 
-    const messages = await service.buildMessages();
+    const { messages } = await service.buildMessages();
 
     expect(messages.join(' ')).toContain('relatório');
   });
@@ -127,7 +129,7 @@ describe('ReviewService.buildMessages (spec FEAT-006 item 6)', () => {
       now: () => FIXED_NOW,
     });
 
-    const messages = await service.buildMessages();
+    const { messages } = await service.buildMessages();
 
     expect(messages.length).toBeGreaterThan(0);
     expect(messages.length).toBeLessThanOrEqual(REVIEW_MAX_MESSAGES);
@@ -219,5 +221,91 @@ describe('ReviewService.buildMessages (spec FEAT-006 item 6)', () => {
     await service.buildMessages();
 
     expect(complete.mock.calls[0]![0].cacheSystemPrompt).toBe(true);
+  });
+
+  /**
+   * Regressão do achado de review: com o Sonnet no ar, a proposta de higiene
+   * nunca pode ser redação livre do modelo — é a área mais sensível a tom
+   * (RSD) do produto e a spec exige template 100% determinístico. Mesmo que
+   * o Sonnet tente formular algo em torno da decisão, o texto enviado tem que
+   * ser exatamente o que `hygieneService.buildMessage` devolveu.
+   */
+  describe('proposta de higiene no caminho do Sonnet (RF-11, nunca redação livre)', () => {
+    const HYGIENE_MESSAGE = 'Dando uma organizada na lista: o que fazer com "projeto parado"? 1) arquivar 2) dropar 3) adiar pra 30/09';
+
+    function buildHygieneServiceStub(message: string): HygieneService {
+      return {
+        findProposal: vi.fn().mockReturnValue({ itemId: 1, title: 'projeto parado', nextMonthDueAt: '2026-09-30T00:00:00.000Z' }),
+        buildMessage: vi.fn().mockReturnValue(message),
+      } as unknown as HygieneService;
+    }
+
+    it('Sonnet disponível e tentando reescrever a proposta com suas próprias palavras: a mensagem de higiene enviada é o template verbatim, nunca a redação do modelo', async () => {
+      // simula exatamente o comportamento do achado: o Sonnet ignora a
+      // instrução e tenta redigir a decisão de higiene com outras palavras.
+      const complete = vi.fn<LlmProvider['complete']>().mockResolvedValue({
+        text: 'Fechou bem hoje.\n\nBora decidir o que fazer com esse projeto parado? Pode arquivar, dropar ou deixar pra semana que vem.',
+        toolCalls: [],
+        usage: { tokensIn: 1, tokensOut: 1, cacheReadTokens: 0 },
+      });
+      const service = new ReviewService({
+        itemService: buildItemServiceStub({ completedToday: [{ title: 'academia' }] }),
+        llmProvider: buildProvider(complete),
+        systemPrompt: () => 'sys',
+        logger,
+        hygieneService: buildHygieneServiceStub(HYGIENE_MESSAGE),
+        now: () => FIXED_NOW,
+      });
+
+      const { messages } = await service.buildMessages();
+
+      // a decisão de higiene efetivamente enviada é sempre o template —
+      // presente verbatim na lista de mensagens.
+      expect(messages).toContain(HYGIENE_MESSAGE);
+      for (const message of messages) assertToneIsSafe(message);
+    });
+
+    it('mensagem de higiene sempre respeita o teto de REVIEW_MAX_MESSAGES mesmo anexada por fora da segmentação do Sonnet', async () => {
+      const complete = vi.fn<LlmProvider['complete']>().mockResolvedValue({
+        text: 'um.\n\ndois.\n\ntrês.\n\nquatro.',
+        toolCalls: [],
+        usage: { tokensIn: 1, tokensOut: 1, cacheReadTokens: 0 },
+      });
+      const service = new ReviewService({
+        itemService: buildItemServiceStub(),
+        llmProvider: buildProvider(complete),
+        systemPrompt: () => 'sys',
+        logger,
+        hygieneService: buildHygieneServiceStub(HYGIENE_MESSAGE),
+        now: () => FIXED_NOW,
+      });
+
+      const { messages } = await service.buildMessages();
+
+      expect(messages).toHaveLength(REVIEW_MAX_MESSAGES);
+      expect(messages.at(-1)).toBe(HYGIENE_MESSAGE);
+    });
+
+    it('prompt de redação nunca pede pro Sonnet reescrever a proposta de higiene', async () => {
+      const complete = vi.fn<LlmProvider['complete']>().mockResolvedValue({
+        text: 'ok',
+        toolCalls: [],
+        usage: { tokensIn: 1, tokensOut: 1, cacheReadTokens: 0 },
+      });
+      const service = new ReviewService({
+        itemService: buildItemServiceStub(),
+        llmProvider: buildProvider(complete),
+        systemPrompt: () => 'sys',
+        logger,
+        hygieneService: buildHygieneServiceStub(HYGIENE_MESSAGE),
+        now: () => FIXED_NOW,
+      });
+
+      await service.buildMessages();
+
+      const draftingPrompt = String(complete.mock.calls[0]![0].messages[0]!.content);
+      expect(draftingPrompt).not.toContain('reescreva');
+      expect(draftingPrompt).not.toContain(HYGIENE_MESSAGE);
+    });
   });
 });

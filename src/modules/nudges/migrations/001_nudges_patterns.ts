@@ -19,7 +19,8 @@ export const nudgesPatterns001: Migration = {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         metrica TEXT NOT NULL,
         valor TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
       CREATE INDEX patterns_metrica_lookup ON patterns (metrica);
