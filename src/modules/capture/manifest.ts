@@ -15,7 +15,7 @@ import {
 } from '../chains/public/index.js';
 import type { AudioLimits } from './domain/index.js';
 import { TriageService } from './triage-service.js';
-import { CaptureService } from './capture-service.js';
+import { CaptureService, type RemoteCalendarPort } from './capture-service.js';
 import { buildCaptureDispatcher } from './capture-dispatcher.js';
 import { AudioCaptureService } from './audio-capture-service.js';
 import { buildReminderJobHandler } from './reminder-job.js';
@@ -35,6 +35,8 @@ export interface CaptureModuleDeps {
   readonly logger: Logger;
   /** Conexão compartilhada com `tasks`/`jobs` (mesmo `db`, ARCHITECTURE.md §2) — usada só para a transação item+job(s) da captura (ADR-018). */
   readonly db: Database;
+  /** Ausente quando o Google nunca foi autorizado (env sem credenciais) — captura degrada graciosamente sem evento remoto (ADR-019). */
+  readonly googleCalendarService?: RemoteCalendarPort;
   /** Injetável para teste — data/hora do prompt da triagem, seleção de tom e disparo de reminder (TESTING.md §7). */
   readonly now?: () => Date;
 }
@@ -109,6 +111,8 @@ export function buildCaptureModule(deps: CaptureModuleDeps): {
     chainService: deps.chainService,
     jobRepository: deps.jobRepository,
     db: deps.db,
+    logger: deps.logger,
+    ...(deps.googleCalendarService ? { googleCalendarService: deps.googleCalendarService } : {}),
     getDeslocamentoMinDefault: () =>
       Number(deps.settings.get<number>(CHAINS_DESLOCAMENTO_MIN_DEFAULT_SETTING) ?? CHAINS_DESLOCAMENTO_MIN_DEFAULT_DEFAULT),
   });

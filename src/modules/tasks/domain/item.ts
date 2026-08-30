@@ -1,6 +1,7 @@
 export type ItemType = 'tarefa' | 'ideia' | 'compromisso' | 'lembrete' | 'nota';
 
-export type ItemOrigin = 'texto' | 'audio' | 'foto' | 'encaminhada' | 'email' | 'trabalho';
+/** `google_calendar`: item nascido da sincronização de leitura da agenda externa (FEAT-005), nunca de captura pelo próprio dono. */
+export type ItemOrigin = 'texto' | 'audio' | 'foto' | 'encaminhada' | 'email' | 'trabalho' | 'google_calendar';
 
 export type ItemStatus = 'inbox' | 'ativa' | 'em_andamento' | 'feita' | 'adiada' | 'arquivada' | 'dropada';
 

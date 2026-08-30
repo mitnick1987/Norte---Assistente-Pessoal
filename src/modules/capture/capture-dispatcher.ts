@@ -46,7 +46,7 @@ export function buildCaptureDispatcher(
       return;
     }
 
-    const captured = deps.captureService.captureItems(result.output.items, messageId, now());
+    const captured = await deps.captureService.captureItems(result.output.items, messageId, now());
 
     // Reprocessamento idempotente (ADR-018): `captured` vem vazio quando a
     // mensagem já tinha gravado os itens numa tentativa anterior. A

@@ -39,7 +39,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn() };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
 
     const processor = new OutboxProcessor({
       repository,
@@ -67,7 +67,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn() };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
     const onDelivered = vi.fn();
 
     const processor = new OutboxProcessor({
@@ -101,7 +101,7 @@ describe('OutboxProcessor', () => {
       sendText: vi.fn().mockRejectedValue(new Error('Evolution respondeu 500')),
       sendPresence: vi.fn(),
     };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
 
     const processor = new OutboxProcessor({
       repository,
@@ -132,7 +132,7 @@ describe('OutboxProcessor', () => {
       sendText: vi.fn().mockRejectedValue(new Error('timeout')),
       sendPresence: vi.fn(),
     };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn().mockResolvedValue(undefined) };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn().mockResolvedValue(undefined), alertRefreshFailure: vi.fn() };
 
     const processor = new OutboxProcessor({
       repository,
@@ -159,7 +159,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn().mockResolvedValue(undefined) };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
     const sleep = vi.fn().mockResolvedValue(undefined);
 
     const processor = new OutboxProcessor({
@@ -187,7 +187,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn(), sendPresence: vi.fn() };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
 
     const processor = new OutboxProcessor({
       repository,
@@ -214,7 +214,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn().mockResolvedValue(undefined) };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
 
     // 00:30 em São Paulo (UTC-03:00) em 26/08 == 03:30 UTC do mesmo dia.
     const processor = new OutboxProcessor({
@@ -257,7 +257,7 @@ describe('OutboxProcessor', () => {
       }),
       sendPresence: vi.fn(),
     };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
 
     const processor = new OutboxProcessor({
       repository,
@@ -288,7 +288,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn() };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn() };
+    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
 
     const processor = new OutboxProcessor({
       repository,

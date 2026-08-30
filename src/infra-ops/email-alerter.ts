@@ -29,4 +29,16 @@ export class EmailAlerter implements FailureAlerter {
     // de vazamento mesmo sem ser secret de sistema).
     this.logger.error({ message }, 'alerta de entrega esgotada');
   }
+
+  async alertRefreshFailure(context: { provider: string; err: unknown }): Promise<void> {
+    if (!this.config.smtpUrl || !this.config.alertEmail) {
+      this.logger.error({ provider: context.provider }, 'alerta de falha de refresh OAuth sem transporte de e-mail configurado');
+      return;
+    }
+    // `err` nunca entra bruto no log estruturado (pode carregar corpo de
+    // resposta do provedor com token/segredo embutido) — só o provider e a
+    // mensagem já bastam para o dono investigar (SECURITY.md §4).
+    const message = context.err instanceof Error ? context.err.message : 'erro desconhecido';
+    this.logger.error({ provider: context.provider, message }, 'alerta de falha de refresh OAuth');
+  }
 }

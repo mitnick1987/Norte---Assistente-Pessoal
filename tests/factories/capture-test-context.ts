@@ -6,15 +6,23 @@ import { SettingsStore } from '../../src/core/settings/index.js';
 import { EventBus } from '../../src/core/bus/index.js';
 import { buildTasksModule } from '../../src/modules/tasks/public/index.js';
 import { buildChainsModule } from '../../src/modules/chains/public/index.js';
-import { CaptureService } from '../../src/modules/capture/capture-service.js';
+import { CaptureService, type RemoteCalendarPort } from '../../src/modules/capture/capture-service.js';
+
+const noopLogger = { info: () => undefined, warn: () => undefined, error: () => undefined } as never;
 
 /**
  * Monta `tasks` + `chains` reais (mesmo caminho de `buildApp`, sem HTTP) —
  * usado pelos testes unitários de `capture-service`/`capture-dispatcher`
  * que precisam da cadeia de compromisso funcionando de ponta a ponta sem
  * subir o app inteiro (TESTING.md §7: nunca mockar o SQLite).
+ *
+ * `googleCalendarService` ausente por padrão reproduz o caso "dono nunca
+ * autorizou o Google" (ADR-019) — os testes que exercitam o caminho
+ * autorizado passam um stub próprio.
  */
-export function buildCaptureTestContext(overrides: { now?: () => Date } = {}) {
+export function buildCaptureTestContext(
+  overrides: { now?: () => Date; googleCalendarService?: RemoteCalendarPort } = {},
+) {
   const db = new Database(':memory:');
   const settings = new SettingsStore(db);
   const eventBus = new EventBus<Record<string, unknown>>();
@@ -43,6 +51,8 @@ export function buildCaptureTestContext(overrides: { now?: () => Date } = {}) {
     chainService,
     jobRepository,
     db,
+    logger: noopLogger,
+    ...(overrides.googleCalendarService ? { googleCalendarService: overrides.googleCalendarService } : {}),
     getDeslocamentoMinDefault: () => 30,
   });
 

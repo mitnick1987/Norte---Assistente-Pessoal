@@ -8,6 +8,7 @@ export interface CreateEventParams {
   readonly endAt?: Date;
   readonly local?: string;
   readonly deslocamentoMin: number;
+  readonly gcalId?: string;
 }
 
 /**
@@ -27,12 +28,23 @@ export class EventService {
       deslocamentoMin: params.deslocamentoMin,
       ...(params.endAt !== undefined ? { endAt: params.endAt } : {}),
       ...(params.local !== undefined ? { local: params.local } : {}),
+      ...(params.gcalId !== undefined ? { gcalId: params.gcalId } : {}),
     };
     return this.repository.create(input);
   }
 
   findActiveByItemId(itemId: number): EventRecord | undefined {
     return this.repository.findActiveByItemId(itemId);
+  }
+
+  /** Deduplicação da sincronização de leitura (FEAT-005): evento do Google já visto não gera `event` interno nem cadeia de novo. */
+  findByGcalId(gcalId: string): EventRecord | undefined {
+    return this.repository.findByGcalId(gcalId);
+  }
+
+  /** Grava o `gcal_id` retornado pela API do Google após criar o evento remoto — chave de idempotência de `create_event` (FEAT-005). */
+  setGcalId(id: number, gcalId: string): EventRecord {
+    return this.repository.setGcalId(id, gcalId);
   }
 
   /** Marcado depois que a cadeia inteira foi gerada com sucesso — evita regenerar cadeia parcial em caso de falha no meio da expansão. */

@@ -95,8 +95,14 @@ Pré-requisito do dono, feito uma única vez, fora do código: criar o app OAuth
 
 ## Entrega (preencher no fim, antes do merge)
 
-- **O que foi feito:** (preencher ao final da implementação)
-- **PRs:** #NN
-- **Migrações:** nomes dos arquivos
-- **Pendências/débitos:** TODOs criados com issues (`#NN`)
-- **Aprendizados:** o que o próximo dev precisa saber e não está óbvio no código
+- **O que foi feito:** OAuth Google (cliente `googleapis`/`google-auth-library`), cifra AES-256-GCM de `auth_tokens`, refresh automático com alerta por e-mail em falha, rotas de setup (`GET /setup/google` e `/callback`) e `list_events` (leitura sob demanda + sincronização mínima com cadeias) — itens 1, 2, 3 e 5 da spec, entregues antes desta sessão. Esta sessão completou o item 4 (escrita) pela **opção A da ADR-019** (caminho determinístico, sem loop de tool-use do brain — isso é FEAT-006): `GoogleCalendarService.createRemoteEvent` foi adicionado ao mesmo serviço que já expõe `listTodayAndSync`, e o `CaptureService` passou a chamar o evento remoto logo após criar o `event` interno de um `compromisso` com data/hora resolvida, gravando o `gcal_id` retornado via `EventService.setGcalId`. Ausência de tokens ou qualquer falha na chamada ao Google é capturada e logada em `warn` — a captura nunca falha por causa do Calendar, e o dono nunca vê erro relacionado a isso.
+- **PRs:** (preencher no merge)
+- **Migrações:** `modules/integrations/google-calendar/migrations/001_google_calendar_auth_tokens.ts` (tabela `auth_tokens`); `modules/tasks/migrations/005_tasks_items_origin_google_calendar.ts` (adiciona `google_calendar` ao `CHECK` de `items.origin`, recriando a tabela — SQLite não tem `ALTER ... DROP CONSTRAINT`). Ambas com `down` testado.
+- **Pendências/débitos:**
+  - A tool `create_event` como `ToolDefinition` do registry (o brain decidindo chamar) fica para a FEAT-006, conforme ADR-019 — não é omissão, é escopo explicitamente adiado.
+  - Duração do evento remoto: quando a triagem só resolve o horário de início (caso comum de "dentista quinta 16h"), o evento no Google é criado com 1h de duração fixa (`DEFAULT_EVENT_DURATION_MS` em `capture-service.ts`) — não há negociação de duração pela frase nesta entrega; a API do Google exige um fim explícito e o `event` interno não teria um se a captura não resolver.
+  - As 4 chaves (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `TOKEN_ENCRYPTION_KEY`) ainda não foram adicionadas ao `.env.example` — arquivo sem permissão de escrita neste ambiente (mesma pendência já registrada pelo implementador anterior); ajuste manual do dono antes do merge.
+- **Aprendizados:**
+  - `db.transaction()` do better-sqlite3 é síncrono — a chamada ao Google (I/O de rede) não pode viver dentro da mesma transação que grava item+event+cadeia. `captureItems` ficou `async`: a transação síncrona persiste item/event/cadeia primeiro; a criação do evento remoto e a gravação do `gcal_id` acontecem depois, fora da transação, num update separado e idempotente (`setGcalId`).
+  - A granularidade de idempotência do ADR-018 (por `source_item_index`) já resolve a duplicação do evento remoto de graça: um item já persistido é pulado inteiro no reprocessamento, então `createRemoteEvent` nunca é chamado de novo para ele. Isso significa que, no caso raro de o processo crashar exatamente entre "event interno criado" e "evento remoto criado com sucesso", o evento remoto simplesmente não é tentado de novo automaticamente — aceito como parte da mesma degradação graciosa (o compromisso já existe e já tem cadeia; falta só o espelho no Google).
+  - `GoogleCalendarService.createRemoteEvent` e `listTodayAndSync` dividem o mesmo `getValidAccessToken` privado — qualquer chamador novo (a tool da FEAT-006, por exemplo) herda de graça o refresh automático e o alerta de falha, sem reimplementar nada.
