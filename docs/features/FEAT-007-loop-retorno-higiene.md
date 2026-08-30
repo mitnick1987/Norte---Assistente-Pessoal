@@ -1,0 +1,115 @@
+# FEAT-007 — Fechamento de loop, próxima ação, modo retorno e higiene
+
+**Status:** rascunho · **Issue:** #17 · **Branch:** `feature/FEAT-007-loop-retorno-higiene` · **Data:** 2026-08-30
+
+## Contexto e objetivo
+
+Até a FEAT-006, o Norte captura, lembra e conversa — mas nunca verifica se o que foi capturado de fato aconteceu, nunca ajuda a escolher "o que fazer agora" quando a lista cresce, e não tem nenhuma resposta para o padrão de uso mais realista do produto: o usuário vai sumir por alguns dias, várias vezes, para sempre. Essa é a lacuna que o PRD chama de "a maior do mercado" (§1): todo app de lembrete lembra, nenhum verifica sem soar como cobrança e nenhum perdoa o sumiço sem exigir "colocar em dia".
+
+Quatro capacidades nascem juntas nesta entrega porque compartilham a mesma pergunta de fundo — "o que este item parado merece agora: cobrança, resposta direta, silêncio ou arquivamento?" — e o mesmo requisito transversal de tom (RF-14): qualquer mensagem sobre atraso, silêncio ou acúmulo é, por definição de produto, um lugar onde a RSD pode disparar. Separar essas quatro capacidades em quatro specs teria fragmentado a decisão sobre quando cada uma se aplica e duplicado os testes de tom.
+
+Atende RF-08 (fechamento de loop), RF-09 ("qual a próxima?" — adiada da FEAT-006 por decisão registrada lá), RF-10 (modo retorno sem culpa) e RF-11 (higiene automática da lista); RF-14 (tom RSD-safe) é transversal e testado em todas as mensagens novas desta entrega. Cria a base mínima de `patterns` (ARCHITECTURE.md §3) que a proposta de reagendamento do RF-08 consome — a proatividade adaptativa plena (RF-24) fica para o M3.
+
+## Escopo
+
+1. **Módulo `modules/nudges` — fechamento de loop (RF-08):**
+   - Job durável (tipo `cobranca` na tabela `jobs`, ADR-004) verifica elegibilidade: item com `dueAt` vencido e ainda em status ativo (`ativa`/`em_andamento`/`adiada`), ou prioridade do dia (as top-N do briefing) não confirmada como feita.
+   - Elegibilidade é função pura em `nudges/domain`: recebe itens + teto diário de cobranças (settings) + contagem já enviada hoje + estado do supressor do modo retorno (item 3) — nunca cobra o mesmo item duas vezes no mesmo dia, nunca cobra com o supressor ativo.
+   - Mensagem neutra com menu "1 feito / 2 reagendar / 3 dropar" — nenhuma variação de texto cita `snoozeCount` ou histórico de falhas (proibição estrutural: o payload que monta a mensagem não carrega esse campo, mesma garantia da FEAT-002/FEAT-006).
+   - Resposta numérica resolvida pelo executor determinístico já existente em `modules/tasks` (mesmo mecanismo do "feito"/"adia"/"dropa" da FEAT-002): "1" completa, "3" dropa (lógico, ADR-009), "2" aciona a proposta de reagendamento.
+   - "2 reagendar" propõe um horário concreto (não pergunta "para quando?"): consulta `modules/patterns` (item 5) por uma janela de resposta habitual do usuário; havendo padrão, propõe esse horário ("sábado de manhã, 9h — topa?"); não havendo, cai no fallback de uma sugestão padrão de settings (ex.: "amanhã 9h"). Confirmação da proposta (ou nova data dita pelo usuário) resolve pelo mesmo `snoozeByText` do RF-07.
+   - Teto de cobranças por dia é chave de settings própria (`nudges.dailyChargeCap`), separada do teto geral de proativas (RF-24, `core/outbox`) — os dois limites se aplicam em conjunto: uma cobrança também conta para o teto geral do outbox.
+
+2. **Módulo `modules/next-action` — "qual a próxima?" (RF-09):**
+   - Comando novo no executor determinístico: qualquer formulação reconhecida ("qual a próxima", "o que eu faço agora", "próximo passo", variações) devolve exatamente UMA ação, nunca lista.
+   - Seleção reusa `selectTopPriorities` de `rituals/domain/priority-selection.ts` (mesma função pura da FEAT-006, sem duplicar critério de prazo/prioridade) — extraída para um local compartilhado que ambos os módulos importam, sem `next-action` depender de internos de `rituals` nem vice-versa (regra de fronteira do ARCHITECTURE.md §2: módulo importa só `core/` e o contrato público de `tasks`).
+   - Critério de desempate idêntico ao do briefing: prazo mais próximo, depois prioridade explícita, depois id — energia (`energia_necessaria`) fica de fora do critério até o M2, coerente com o campo já existir no schema mas não ser preenchido/consumido ainda.
+   - Lista completa só sai com pedido explícito ("me mostra tudo", já existente desde a FEAT-002) — o comando novo nunca degrada para listar tudo sozinho.
+   - Sem item ativo elegível, resposta honesta e curta ("nada pendente agora"), nunca "não entendi".
+
+3. **Módulo `modules/return-mode` — modo retorno sem culpa (RF-10):**
+   - Detecção de silêncio: última mensagem de entrada (`messages.direcao = 'in'`) mais antiga que 48h ativa o modo; primeira mensagem de entrada nova (ou o próximo briefing, se vier antes) desativa.
+   - Enquanto ativo: cobranças (item 1) são suprimidas — o job `cobranca` não dispara, mas a elegibilidade acumulada não se perde, só fica represada; proatividade geral reduzida ao essencial (só jobs de compromisso com hora — cadeias `chains`/lembretes pontuais seguem disparando, briefing/revisão seguem como rituais-âncora já existentes desde a FEAT-006; cobranças e qualquer proativa não essencial ficam suprimidas).
+   - Na reativação (primeira mensagem de entrada, ou briefing seguinte se a mensagem não chegar antes): UMA mensagem de resumo compacto de reentrada — o que ficou parado durante o silêncio, sem pedir nenhuma decisão nesse momento e sem despejar as cobranças represadas (elas continuam suprimidas; voltam a ser avaliadas normalmente pelo job de cobrança do dia seguinte, já sob o teto diário normal).
+   - Proibição testada por cenário (TESTING.md §4.1): nenhuma formulação do resumo pede "colocar em dia", nenhuma lista as cobranças acumuladas item a item.
+   - Estado do modo retorno é derivado (calculado a partir de `messages`), não uma tabela nova — decisão registrada abaixo.
+
+4. **Módulo `modules/hygiene` — higiene automática (RF-11):**
+   - Critério de elegibilidade (função pura em `hygiene/domain`): item ativo com `snoozeCount >= 3` OU parado (sem mudança de status) há `>= 21` dias.
+   - Proposta entra na revisão noturna já existente (FEAT-006, `modules/rituals`) como a UMA decisão pedida daquele dia quando houver item elegível — reaproveita o limite de "no máximo uma decisão" já imposto no código da revisão, não soma decisões novas.
+   - Opções oferecidas: arquivar / dropar / adiar para o mês que vem — nunca formuladas como fracasso (mesma régua de tom das outras mensagens desta entrega); arquivar e dropar são sempre lógicos (ADR-009); "adiar pro mês que vem" usa o mesmo `snoozeByText`/`ItemService` já existente, com uma data concreta calculada (não pergunta "para quando?").
+   - `snoozeCount` nunca é exibido ao usuário — mesma garantia estrutural das entregas anteriores (tipo de payload sem o campo, testado por asserção direta, não só na formatação da mensagem).
+
+5. **Tabela `patterns` (mínima, só o necessário para o RF-08):**
+   - Migração nova (`core` ou módulo dedicado, a decidir na implementação — ver Decisões) com o schema mínimo do ER do ARCHITECTURE.md §3: `metrica` (por ora só `janela_resposta_habitual`) + `valor` (json).
+   - Alimentada por um agregado simples: quando o usuário responde a uma proativa (cobrança, lembrete, ritual), registra o dia da semana + faixa horária da resposta; a proposta de reagendamento do RF-08 lê o horário mais frequente das últimas N respostas.
+   - Deliberadamente mínima: sem taxa de resposta, sem horário de despertar, sem redução automática de volume — isso é RF-24 (M3), fora de escopo aqui.
+
+6. **Tom RSD-safe (RF-14, transversal):**
+   - Toda mensagem nova desta entrega (cobrança 1/2/3, proposta de reagendamento, resposta de "qual a próxima", resumo de reentrada, proposta de higiene) entra na suite de `tests/tone/` com os mesmos padrões proibidos já estabelecidos (menção a histórico de falhas, tom de fiscal, tom de animador de torcida) mais os casos específicos desta feature (nunca "colocar em dia", nunca listar cobranças acumuladas, sempre oferecer "dropar" em cobrança).
+   - Banco de variações estático para as mensagens 100% determinísticas (cobrança, resumo de reentrada, proposta de higiene não passam pelo Sonnet nesta entrega — ver Decisões).
+
+## Fora de escopo
+
+- **Proatividade adaptativa plena (RF-24, M3):** `patterns` nesta entrega é o mínimo para "sábado de manhã" alimentar o RF-08; taxa de resposta agregada, deslize de horário de briefing e redução automática de volume ficam para lá.
+- **Energia (`energia_necessaria`, M2):** RF-09 seleciona por prazo/prioridade/hora do dia; energia entra no critério quando RF-21 existir.
+- **Memória de longo prazo / `facts` (M2):** nenhuma das quatro capacidades desta entrega consome ou escreve em `modules/memory`.
+- **Retrospectiva mensal (RF-27, M3):** a proposta de higiene entra na revisão noturna diária, não numa retrospectiva.
+- **Micropassos/"só 5 minutos"/if-then (RF-17, RF-18, M2):** a proposta de higiene oferece arquivar/dropar/adiar — nunca "vamos quebrar essa tarefa".
+- **Redação do Sonnet nas mensagens desta entrega:** cobrança, resumo de reentrada e proposta de higiene saem por template determinístico (banco de variações estático), não por chamada ao Sonnet — decisão registrada abaixo.
+
+## Decisões tomadas
+
+| Decisão | Alternativas consideradas | Por quê |
+|---|---|---|
+| Cobrança, resumo de reentrada e proposta de higiene são 100% template determinístico (sem Sonnet), com o mesmo padrão de banco de variações estático da FEAT-002 | (a) Sonnet redige sobre dados coletados por código, com fallback template (mesmo padrão do briefing/revisão da FEAT-006); (b) sempre Sonnet, sem fallback | Estas são mensagens de menu numerado com estrutura fixa (1/2/3, ou resumo de N itens parados) — o ganho de redação variada do Sonnet é menor aqui do que no briefing/revisão (que são prosa livre), e o risco de tom é maior (área mais sensível a RSD do produto inteiro). Manter 100% determinístico remove a categoria inteira de risco "o Sonnet formulou algo que soou crítico apesar das regras do prompt" exatamente onde esse risco é mais caro; ADR-006 já estabelece o padrão de caminho determinístico como opção legítima, não só como fallback |
+| Estado do modo retorno é derivado de `messages` (calculado sob demanda), não uma tabela/coluna de estado persistido | Tabela `return_mode_state` (ou coluna em `settings`) com um flag `active`/`suppressed_since` atualizado por job | Não há necessidade de um job dedicado "detectar silêncio": a pergunta "faz 48h que não chega mensagem de entrada?" é uma consulta simples em `messages` (já indexada por tempo desde a FEAT-001), recalculável a qualquer momento sem risco de o estado persistido dessincronizar da realidade (ex.: um restart no meio da janela de silêncio). Simplicidade > persistência de um estado que é sempre reconstituível |
+| Seleção de "próxima ação" (RF-09) reusa `selectTopPriorities`, extraída de `rituals/domain` para um pacote compartilhado, em vez de reimplementada em `next-action/domain` | Reimplementar o critério de prazo/prioridade dentro de `next-action/domain`, aceitando pequena duplicação | ARCHITECTURE.md §4 já lista `next-action/domain` como dono da seleção da "UMA próxima ação"; duplicar o critério do briefing arriscaria os dois divergirem silenciosamente (briefing escolhe prioridade 1, "qual a próxima" escolhe outra) — o próprio PRD trata as duas perguntas como a mesma pergunta em contextos diferentes |
+| Teto de cobranças por dia é uma chave de settings própria (`nudges.dailyChargeCap`), aplicado em conjunto com o teto geral de proativas do outbox, não substituindo-o | Um único teto geral (RF-24) cobrindo cobranças também, sem chave dedicada | O PRD (RF-08) fala em "teto de cobranças por dia" como parâmetro próprio, distinto do teto geral de ~6 proativas/dia — cobrança é a categoria de mensagem mais sensível a habituação e RSD, então merece um limite dedicado e mais conservador, sem deixar de contar para o limite geral (dupla proteção, não substituição) |
+| `patterns` nasce com uma métrica só (`janela_resposta_habitual`), como migração mínima dentro de `modules/nudges` (não um módulo `patterns` próprio ainda) | Módulo `modules/memory` (que já vai existir no M2 para `facts`) hospedando `patterns` desde já; ou módulo dedicado `modules/patterns` completo, já pensando no RF-24 | O ARCHITECTURE.md já reserva `patterns` como entidade própria do modelo de dados, mas RF-24 (dono conceitual de `patterns`) é M3 — criar o módulo completo agora seria adiantar escopo sem o resto do contexto (múltiplas métricas, redução automática de volume). A tabela mínima nasce onde é consumida (`nudges`), e vira módulo próprio quando RF-24 justificar a extração — mesma lógica de "nasce onde é usado, extrai quando o segundo consumidor aparecer" já aplicada a outras decisões do projeto |
+
+(Nenhuma decisão nova de arquitetura de impacto duradouro — os quatro módulos já estão nomeados e com fronteira definida no ARCHITECTURE.md §2 desde a fundação; o scheduler durável é ADR-004, o caminho determinístico é ADR-006, a deleção lógica é ADR-009. Esta feature instancia essas decisões, não abre nenhuma nova.)
+
+## Impacto técnico
+
+- **Banco:** tabela nova `patterns` (migração no módulo `nudges`, schema mínimo `metrica`/`valor` json). `jobs` ganha o valor `cobranca` dentro do `CHECK` de `tipo` já existente. Nenhuma coluna nova em `items` — `snoozeCount` (FEAT-002) e `dueAt`/`status`/`updatedAt` já existentes cobrem os critérios de elegibilidade de RF-08/RF-11. Sistema single-user, sem dado de cliente, sem migração de dados existentes.
+- **API:** nenhuma rota HTTP nova — cobrança e higiene são jobs (scheduler existente), "qual a próxima" é comando novo no executor determinístico, modo retorno é lógica de decisão que roda antes de qualquer job/proativa disparar. Superfície pública continua `POST /webhook/evolution` e `GET /health`.
+- **Frontend:** nenhum — interface 100% WhatsApp.
+- **Permissões:** sistema single-user; sem mudança no controle de acesso.
+- **Áreas sensíveis tocadas** (gatilho de `security-auditor` obrigatório no review): teto diário de cobranças e a interação dele com o teto geral do outbox (validar que os dois limites são impostos no backend, nunca só no prompt — SECURITY.md §2, mesma regra de RF-24); supressão de proatividade pelo modo retorno é lógica nova que decide "essa mensagem sai ou não" — validar que ela nunca suprime um lembrete de compromisso com hora (caminho crítico, ADR-006) e nunca vaza a contagem de cobranças represadas para o usuário.
+
+## Testes
+
+| Tipo | O que cobre |
+|---|---|
+| Unit — `nudges/domain` (elegibilidade) | Item vencido em status ativo é elegível; item já cobrado hoje não é elegível de novo; teto diário atingido bloqueia nova cobrança; supressor do modo retorno ativo bloqueia toda elegibilidade; prioridade do dia não confirmada gera elegibilidade mesmo sem `dueAt` vencido. |
+| Unit — `nudges/domain` (proposta de reagendamento) | Padrão existente em `patterns` gera proposta de horário concreto; ausência de padrão cai no fallback de settings; proposta nunca é a pergunta "para quando?". |
+| Unit — `next-action/domain` | Seleção devolve exatamente 1 item para um conjunto com vários candidatos; critério idêntico ao briefing (mesmo desempate por prazo/prioridade/id); nenhum item ativo elegível devolve "vazio", nunca lista parcial. |
+| Unit — `return-mode/domain` | Silêncio < 48h não ativa o modo; silêncio >= 48h ativa; mensagem de entrada nova desativa; payload do resumo de reentrada nunca contém lista de cobranças acumuladas nem contagem delas. |
+| Unit — `hygiene/domain` | Item com `snoozeCount >= 3` é elegível; item parado `>= 21` dias sem esse número de adiamentos também é elegível; item recém-modificado com poucos adiamentos não é elegível; payload da proposta nunca inclui `snoozeCount`. |
+| Unit — deleção lógica | Higiene "arquivar"/"dropar" nunca gera `DELETE`, sempre `status` (mesma suite S5 do TESTING.md, estendida aos novos call-sites). |
+| Unit — TZ | Cálculo de "21 dias parado" e "48h de silêncio" e a data concreta de "adiar pro mês que vem"/"sábado de manhã" resolvidos em `America/Sao_Paulo`, com casos cruzando meia-noite e virada de mês. |
+| Integração — fechamento de loop | Item com prazo vencido → job `cobranca` → mensagem no outbox com menu 1/2/3 → resposta "1" completa o item; resposta "2" gera proposta de horário concreto; resposta "3" dropa (lógico) → status final verificado no SQLite, não só na resposta HTTP. |
+| Integração — modo retorno | 48h de silêncio simulado com item vencido pendente de cobrança → mensagem de entrada do usuário chega → exatamente 1 mensagem de resumo no outbox, nenhuma cobrança despejada junto. |
+| Integração — higiene na revisão noturna | Item com 3+ adiamentos presente na véspera do job `revisao` → revisão inclui a proposta de higiene como a única decisão pedida daquele dia. |
+| Integração — catch-up | Jobs `cobranca` com `next_run_at` vencido sobrevivem a restart (mesmo padrão de catch-up já testado para `reminder`/`briefing`/`revisao`). |
+| Suite de TOM (`tests/tone/`) | Todas as mensagens novas (cobrança, proposta de reagendamento, resposta de "qual a próxima", resumo de reentrada, proposta de higiene) passam pelos padrões proibidos do TESTING.md §4.1; cenário dedicado: 48h de silêncio com múltiplos itens vencidos gera **no máximo** 1 mensagem proativa na volta; nenhuma mensagem de higiene ou cobrança soa como fracasso. |
+| Segurança/isolamento (S3 estendida) | Teto diário de cobranças aplicado no backend mesmo sob tentativa de forçar disparos repetidos; teto geral do outbox continua valendo em conjunto com o teto de cobranças. |
+
+## Como validar manualmente
+
+1. Criar uma tarefa com prazo já vencido: aguardar o job de cobrança (ou forçar `next_run_at` no passado) — mensagem "1 feito / 2 reagendar / 3 dropar" chega, sem menção a adiamentos.
+2. Responder "2": proposta de horário concreto chega (baseada em `patterns`, se houver histórico, ou no fallback de settings) — nunca a pergunta "para quando?".
+3. Enviar "qual a próxima?": resposta com exatamente UMA ação. Enviar "me mostra tudo": lista completa aparece só aqui.
+4. Simular 48h sem enviar nenhuma mensagem (ajustar relógio de teste ou aguardar) com pelo menos um item vencido pendente: enviar uma mensagem qualquer — chega exatamente 1 resumo de reentrada, nenhuma cobrança acumulada é despejada.
+5. Adiar a mesma tarefa 3 vezes (ou aguardar 21 dias parada): na revisão noturna seguinte, a proposta de higiene (arquivar/dropar/adiar pro mês que vem) aparece como a decisão do dia, formulada como manutenção de rotina.
+
+---
+
+## Entrega (preencher no fim, antes do merge)
+
+- **O que foi feito:** (preencher ao final da implementação)
+- **PRs:** #NN
+- **Migrações:** nomes dos arquivos
+- **Pendências/débitos:** TODOs criados com issues (`#NN`)
+- **Aprendizados:** o que o próximo dev precisa saber e não está óbvio no código
