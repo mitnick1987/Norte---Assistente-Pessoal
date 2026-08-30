@@ -24,13 +24,18 @@ export default tseslint.config(
       },
       'boundaries/elements': [
         { type: 'core', pattern: 'src/core/*' },
-        // module-public precisa vir antes de module: o matcher do plugin
-        // usa o primeiro pattern que casar, e "src/modules/*/public" é um
-        // caso mais específico de "src/modules/*" — na ordem trocada, todo
-        // arquivo em modules/*/public/ seria classificado como "module" e a
-        // fronteira pública deixaria de existir silenciosamente.
-        { type: 'module-public', pattern: 'src/modules/*/public/**/*', capture: ['moduleName'] },
-        { type: 'module', pattern: 'src/modules/*/**/*', capture: ['moduleName'] },
+        // module-public precisa vir antes de module (mesmo motivo do par
+        // abaixo): o matcher do plugin usa o primeiro pattern que casar, e
+        // "público" é sempre o caso mais específico do que "módulo inteiro".
+        // `integrations/*` tem um nível a mais (ARCHITECTURE.md §2: cada
+        // conector é seu próprio módulo plugável, ex. `integrations/google-calendar`,
+        // `integrations/gmail`) — sem esses dois patterns antes do genérico,
+        // todo arquivo dentro de `integrations/*/**` capturaria "integrations"
+        // como moduleName e nenhum conector teria fronteira própria.
+        { type: 'module-public', pattern: 'src/modules/integrations/*/public', capture: ['moduleName'] },
+        { type: 'module', pattern: 'src/modules/integrations/*', capture: ['moduleName'] },
+        { type: 'module-public', pattern: 'src/modules/*/public', capture: ['moduleName'] },
+        { type: 'module', pattern: 'src/modules/*', capture: ['moduleName'] },
         { type: 'infra-ops', pattern: 'src/infra-ops/*' },
         { type: 'app', pattern: 'src/app.ts' },
       ],

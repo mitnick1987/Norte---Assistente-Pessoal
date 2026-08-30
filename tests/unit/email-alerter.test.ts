@@ -30,4 +30,27 @@ describe('EmailAlerter', () => {
     expect(payload['alertEmail']).toBeUndefined();
     expect(JSON.stringify(payload)).not.toContain('dono@example.com');
   });
+
+  it('loga falha de refresh OAuth em error mesmo sem transporte configurado (nunca falha em silêncio)', async () => {
+    const logger = silentLogger() as { error: ReturnType<typeof vi.fn> };
+    const alerter = new EmailAlerter({ smtpUrl: undefined, alertEmail: undefined }, logger as never);
+
+    await alerter.alertRefreshFailure({ provider: 'google_calendar', err: new Error('invalid_grant') });
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('loga falha de refresh OAuth só com provider e mensagem, nunca o erro bruto (pode carregar corpo de resposta com segredo)', async () => {
+    const logger = silentLogger() as { error: ReturnType<typeof vi.fn> };
+    const alerter = new EmailAlerter(
+      { smtpUrl: 'smtp://localhost:1025', alertEmail: 'dono@example.com' },
+      logger as never,
+    );
+
+    await alerter.alertRefreshFailure({ provider: 'google_calendar', err: new Error('invalid_grant') });
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const [payload] = logger.error.mock.calls[0] as [Record<string, unknown>];
+    expect(payload).toEqual({ provider: 'google_calendar', message: 'invalid_grant' });
+  });
 });

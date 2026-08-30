@@ -31,10 +31,19 @@ const REDACTED_PATHS = [
   'ANTHROPIC_API_KEY',
   'GROQ_API_KEY',
   'OPENAI_API_KEY',
+  'GOOGLE_CLIENT_SECRET',
   'refreshToken',
   '*.refreshToken',
   'refresh_token',
   '*.refresh_token',
+  'accessToken',
+  '*.accessToken',
+  'access_token',
+  '*.access_token',
+  'accessTokenEncrypted',
+  '*.accessTokenEncrypted',
+  'refreshTokenEncrypted',
+  '*.refreshTokenEncrypted',
 ];
 
 /**

@@ -32,6 +32,11 @@ import {
   PENDING_RECOVERY_THRESHOLD_MS_SETTING,
   PENDING_RECOVERY_MAX_PER_BOOT_SETTING,
 } from './modules/capture/manifest.js';
+import { buildGoogleCalendarModule, registerGoogleCalendarSetupRoutes } from './modules/integrations/google-calendar/public/index.js';
+import {
+  CHAINS_DESLOCAMENTO_MIN_DEFAULT_DEFAULT,
+  CHAINS_DESLOCAMENTO_MIN_DEFAULT_SETTING,
+} from './modules/chains/public/index.js';
 
 const OUTBOX_INTERVAL_MS = 5_000;
 const PENDING_PROCESSING_POLL_MS = 20;
@@ -130,6 +135,38 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     instance: env.EVOLUTION_INSTANCE,
   });
 
+  const alerter = new EmailAlerter({ smtpUrl: env.SMTP_URL, alertEmail: env.ALERT_EMAIL }, logger);
+
+  // Credenciais OAuth ausentes não podem derrubar o boot (spec item 5): o
+  // setup é manual e único, feito bem depois do primeiro `docker compose up`.
+  // Sem elas o módulo simplesmente não nasce — nenhuma rota de setup, nenhuma
+  // migração de auth_tokens rodando "no vazio" à toa (ela só faz sentido
+  // quando o resto da config existe).
+  const googleCalendarConfig =
+    env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REDIRECT_URI && env.TOKEN_ENCRYPTION_KEY
+      ? {
+          clientId: env.GOOGLE_CLIENT_ID,
+          clientSecret: env.GOOGLE_CLIENT_SECRET,
+          redirectUri: env.GOOGLE_REDIRECT_URI,
+          tokenEncryptionKey: env.TOKEN_ENCRYPTION_KEY,
+        }
+      : undefined;
+
+  const googleCalendarModule = googleCalendarConfig
+    ? buildGoogleCalendarModule({
+        db,
+        config: googleCalendarConfig,
+        eventService,
+        itemService,
+        chainService,
+        alerter,
+        logger,
+        getDeslocamentoMinDefault: () =>
+          Number(settings.get<number>(CHAINS_DESLOCAMENTO_MIN_DEFAULT_SETTING) ?? CHAINS_DESLOCAMENTO_MIN_DEFAULT_DEFAULT),
+        ...(overrides.now ? { now: overrides.now } : {}),
+      })
+    : undefined;
+
   const {
     manifest: captureManifest,
     dispatch: dispatchCapture,
@@ -149,6 +186,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     ownerJid: env.OWNER_WHATSAPP_JID,
     logger,
     db,
+    ...(googleCalendarModule ? { googleCalendarService: googleCalendarModule.service } : {}),
     ...(overrides.now ? { now: overrides.now } : {}),
   });
 
@@ -156,6 +194,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   registry.register(tasksManifest);
   registry.register(chainsManifest);
   registry.register(captureManifest);
+  if (googleCalendarModule) registry.register(googleCalendarModule.manifest);
 
   runMigrations(db, [...coreMigrations, ...registry.getMigrations()]);
 
@@ -170,8 +209,6 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   });
 
   const connectionWatchdog = new ConnectionWatchdog();
-
-  const alerter = new EmailAlerter({ smtpUrl: env.SMTP_URL, alertEmail: env.ALERT_EMAIL }, logger);
 
   const outboxProcessor = new OutboxProcessor({
     repository: outboxRepository,
@@ -209,6 +246,14 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     getLastSchedulerTick: () => scheduler.getLastTickAt(),
     buildVersion: BUILD_VERSION,
   });
+
+  // Rotas administrativas de setup único (spec FEAT-005, impacto técnico):
+  // fora do webhook público, sem filtro de JID — o infra/Caddyfile expõe
+  // publicamente só /webhook/evolution* e /health (404 para o resto), então
+  // /setup/* só responde a quem chega direto na porta local/túnel SSH.
+  if (googleCalendarModule) {
+    registerGoogleCalendarSetupRoutes(fastify, googleCalendarModule.service);
+  }
 
   let outboxTimer: NodeJS.Timeout | undefined;
 

@@ -54,4 +54,25 @@ describe('loadEnv', () => {
       expect((err as Error).message).not.toContain('key');
     }
   });
+
+  it('sobe sem as credenciais do Google Calendar (setup é manual e opcional, spec item 5 da FEAT-005)', () => {
+    const env = loadEnv(validEnv());
+    expect(env.GOOGLE_CLIENT_ID).toBeUndefined();
+    expect(env.TOKEN_ENCRYPTION_KEY).toBeUndefined();
+  });
+
+  it('aceita TOKEN_ENCRYPTION_KEY válida (32 bytes em base64, AES-256-GCM)', () => {
+    const key = Buffer.alloc(32, 7).toString('base64');
+    const env = loadEnv({ ...validEnv(), TOKEN_ENCRYPTION_KEY: key });
+    expect(env.TOKEN_ENCRYPTION_KEY).toBe(key);
+  });
+
+  it('rejeita TOKEN_ENCRYPTION_KEY com tamanho diferente de 32 bytes (ADR-010, SECURITY.md §4)', () => {
+    const shortKey = Buffer.alloc(16, 7).toString('base64');
+    expect(() => loadEnv({ ...validEnv(), TOKEN_ENCRYPTION_KEY: shortKey })).toThrow(InvalidEnvError);
+  });
+
+  it('rejeita GOOGLE_REDIRECT_URI que não seja uma URL', () => {
+    expect(() => loadEnv({ ...validEnv(), GOOGLE_REDIRECT_URI: 'não-é-url' })).toThrow(InvalidEnvError);
+  });
 });

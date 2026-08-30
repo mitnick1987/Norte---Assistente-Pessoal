@@ -45,6 +45,23 @@ const envSchema = z.object({
   // total tratada pelo módulo capture (spec item 1, nunca erro de boot).
   GROQ_API_KEY: z.string().min(1).optional(),
   OPENAI_API_KEY: z.string().min(1).optional(),
+
+  // Área sensível (FEAT-005, ADR-010, SECURITY.md §4): credenciais do app
+  // OAuth do Google e chave de cifra dos tokens em repouso. Opcionais no
+  // boot — o setup é manual e único (GET /setup/google), então o processo
+  // sobe sem elas; a leitura/escrita da agenda só falha (com erro claro) se
+  // alguém tentar usá-las sem esse setup ter sido feito.
+  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+  GOOGLE_REDIRECT_URI: z.string().url().optional(),
+  // AES-256-GCM exige chave de 32 bytes — validado em base64 aqui (falha
+  // rápida no boot) em vez de só no primeiro uso do TokenCipher.
+  TOKEN_ENCRYPTION_KEY: z
+    .string()
+    .optional()
+    .refine((value) => value === undefined || Buffer.from(value, 'base64').length === 32, {
+      message: 'TOKEN_ENCRYPTION_KEY precisa ser 32 bytes em base64 (AES-256-GCM)',
+    }),
 });
 
 export type Env = z.infer<typeof envSchema>;

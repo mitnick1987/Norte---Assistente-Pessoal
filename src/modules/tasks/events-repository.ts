@@ -40,6 +40,8 @@ export interface CreateEventInput {
   readonly endAt?: Date;
   readonly local?: string;
   readonly deslocamentoMin: number;
+  /** Já conhecido no momento da criação (sincronização de leitura, FEAT-005) — evento nascido no Google, não por captura própria. */
+  readonly gcalId?: string;
 }
 
 /**
@@ -54,11 +56,12 @@ export class EventsRepository {
   create(input: CreateEventInput): EventRecord {
     const result = this.db
       .prepare(
-        `INSERT INTO events (item_id, title, start_at, end_at, local, deslocamento_min, cadeia_gerada)
-         VALUES (?, ?, ?, ?, ?, ?, 0)`,
+        `INSERT INTO events (item_id, gcal_id, title, start_at, end_at, local, deslocamento_min, cadeia_gerada)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         input.itemId,
+        input.gcalId ?? null,
         input.title,
         input.startAt.toISOString(),
         input.endAt ? input.endAt.toISOString() : null,
@@ -78,6 +81,29 @@ export class EventsRepository {
     const row = this.findById(id);
     if (!row) throw new Error(`evento ${id} não encontrado logo após INSERT`);
     return row;
+  }
+
+  /**
+   * Deduplicação da sincronização de leitura (FEAT-005, spec item 3): evento
+   * do Google já visto não gera `event` interno nem cadeia de novo. Filtra
+   * só `status = 'ativo'` de propósito — um evento cancelado (drop do item
+   * pelo dono) mantém o `gcal_id` por ser deleção lógica (ADR-009), mas não
+   * pode bloquear o re-sync para sempre: se o compromisso persistir/
+   * reaparecer na agenda do Google, o dono volta a ser lembrado.
+   */
+  findByGcalId(gcalId: string): EventRecord | undefined {
+    const row = this.db
+      .prepare<[string], EventRow>(`SELECT * FROM events WHERE gcal_id = ? AND status = 'ativo'`)
+      .get(gcalId);
+    return row ? toRecord(row) : undefined;
+  }
+
+  /** Grava o `gcal_id` retornado pela API do Google após criar o evento remoto (FEAT-005, spec item 4) — chave de idempotência de `create_event`. */
+  setGcalId(id: number, gcalId: string): EventRecord {
+    this.db
+      .prepare(`UPDATE events SET gcal_id = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(gcalId, id);
+    return this.findByIdOrThrow(id);
   }
 
   /** Evento ativo mais recente de um item — um compromisso tem no máximo um evento vivo por vez (reagendamento cancela o anterior antes de criar o novo). */
