@@ -53,7 +53,7 @@ export interface GoogleCalendarEventResult {
  * extensão como o `fetchFn` do provedor Anthropic).
  */
 export interface GoogleOAuthPort {
-  buildConsentUrl: () => string;
+  buildConsentUrl: (state: string) => string;
   exchangeCode: (code: string) => Promise<GoogleTokenSet>;
   refresh: (refreshToken: string) => Promise<GoogleTokenSet>;
   listEventsToday: (accessToken: string, timeMin: Date, timeMax: Date) => Promise<GoogleCalendarEventResult[]>;
@@ -83,12 +83,19 @@ export class GoogleOAuthClient implements GoogleOAuthPort {
     this.client = new OAuth2Client(config.clientId, config.clientSecret, config.redirectUri);
   }
 
-  /** `access_type: offline` + `prompt: consent` força reemissão do refresh_token (spec item 1) — sem isso o Google só devolve na primeira autorização. */
-  buildConsentUrl(): string {
+  /**
+   * `access_type: offline` + `prompt: consent` força reemissão do
+   * refresh_token (spec item 1) — sem isso o Google só devolve na primeira
+   * autorização. `state` é gerado e validado por quem chama
+   * (GoogleCalendarService) — mitigação padrão de CSRF/injeção de código no
+   * callback OAuth2; este client só repassa o valor, nunca decide sozinho.
+   */
+  buildConsentUrl(state: string): string {
     return this.client.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
       scope: [GOOGLE_CALENDAR_SCOPE],
+      state,
     });
   }
 

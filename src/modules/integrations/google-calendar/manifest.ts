@@ -52,6 +52,7 @@ export function buildGoogleCalendarModule(deps: BuildGoogleCalendarModuleDeps): 
   const cipher = new TokenCipher(deps.config.tokenEncryptionKey);
 
   const service = new GoogleCalendarService({
+    db: deps.db,
     tokensRepository,
     oauthClient,
     cipher,

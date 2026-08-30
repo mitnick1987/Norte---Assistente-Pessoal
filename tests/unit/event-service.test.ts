@@ -86,4 +86,19 @@ describe('EventService (CRUD de domínio de events, FEAT-004)', () => {
 
     expect(second).toBeUndefined();
   });
+
+  it('findByGcalId encontra evento ativo pelo gcalId (sincronização de leitura, FEAT-005)', () => {
+    const { service } = buildService();
+    service.create({ itemId: 1, title: 'reunião', startAt: new Date(), deslocamentoMin: 0, gcalId: 'gcal-x' });
+
+    expect(service.findByGcalId('gcal-x')).toMatchObject({ gcalId: 'gcal-x', status: 'ativo' });
+  });
+
+  it('findByGcalId ignora evento cancelado (drop) — não bloqueia re-sync do mesmo compromisso do Google', () => {
+    const { service } = buildService();
+    const event = service.create({ itemId: 1, title: 'reunião', startAt: new Date(), deslocamentoMin: 0, gcalId: 'gcal-y' });
+    service.cancel(event.id);
+
+    expect(service.findByGcalId('gcal-y')).toBeUndefined();
+  });
 });

@@ -53,6 +53,40 @@ describe('migração tasks_005_items_origin_google_calendar', () => {
     );
   });
 
+  it('migração de base já existente (upgrade) preserva cada coluna no lugar certo — não embaralha por posição', () => {
+    // Reproduz o cenário real de produção: 001-004 já aplicadas (source_message_id
+    // e source_item_index entraram via ALTER TABLE ADD COLUMN, que anexa ao FINAL
+    // da tabela), item já capturado ANTES da 005 rodar. Se o INSERT...SELECT da 005
+    // for posicional (SELECT *), a ordem declarada em items_new (que põe
+    // source_message_id/source_item_index ANTES de created_at/updated_at) diverge
+    // da ordem real da tabela viva e os valores trocam de coluna silenciosamente.
+    const db = new Database(':memory:');
+    const migrationsBefore005 = tasksMigrations.filter((m) => m.id !== 'tasks_005_items_origin_google_calendar');
+    runMigrations(db, migrationsBefore005);
+
+    db.prepare(
+      `INSERT INTO items (type, title, origin, source_message_id, source_item_index, created_at, updated_at)
+       VALUES ('tarefa', 'preexistente', 'texto', 42, 3, '2020-01-01T10:00:00.000Z', '2021-06-15T12:30:00.000Z')`,
+    ).run();
+
+    runMigrations(db, tasksMigrations);
+
+    const row = db
+      .prepare('SELECT source_message_id, source_item_index, created_at, updated_at FROM items')
+      .get() as {
+      source_message_id: number;
+      source_item_index: number;
+      created_at: string;
+      updated_at: string;
+    };
+    expect(row).toEqual({
+      source_message_id: 42,
+      source_item_index: 3,
+      created_at: '2020-01-01T10:00:00.000Z',
+      updated_at: '2021-06-15T12:30:00.000Z',
+    });
+  });
+
   it('índice único composto (source_message_id, source_item_index) continua ativo após a recriação', () => {
     const db = new Database(':memory:');
     runMigrations(db, tasksMigrations);

@@ -1,3 +1,5 @@
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import type { Database } from 'better-sqlite3';
 import type { Logger } from 'pino';
 import { startOfZonedDay, zonedTimeToUtc } from '../../../core/scheduler/domain/index.js';
 import type { FailureAlerter } from '../../../core/outbox/index.js';
@@ -17,6 +19,7 @@ import type { TokenCipher } from './token-cipher.js';
 const EXPIRY_SAFETY_MARGIN_MS = 5 * 60_000;
 
 export interface GoogleCalendarServiceDeps {
+  readonly db: Database;
   readonly tokensRepository: AuthTokensRepository;
   readonly oauthClient: GoogleOAuthPort;
   readonly cipher: TokenCipher;
@@ -57,6 +60,14 @@ export class GoogleTokenRefreshError extends Error {
   }
 }
 
+/** Callback sem `state` ou com valor que não confere com o gerado em `buildConsentUrl` — rejeita antes de trocar qualquer código (CSRF/injeção de código OAuth). */
+export class InvalidOAuthStateError extends Error {
+  constructor() {
+    super('state do callback OAuth ausente ou inválido — refaça o setup a partir de GET /setup/google');
+    this.name = 'InvalidOAuthStateError';
+  }
+}
+
 /**
  * Orquestração do OAuth + sincronização mínima com cadeias (spec itens 2 e
  * 3). Nenhuma chamada à API do Google acontece sem passar por
@@ -67,16 +78,33 @@ export class GoogleTokenRefreshError extends Error {
  */
 export class GoogleCalendarService {
   private readonly now: () => Date;
+  /**
+   * State pendente do setup em curso, uso único (spec item 1 + achado de
+   * segurança CSRF/injeção de código): setup é operação manual serial do
+   * dono, então guardar em memória do processo é suficiente — não precisa
+   * de tabela própria nem sobreviver a um restart no meio do fluxo (o dono
+   * simplesmente reabre GET /setup/google e gera outro).
+   */
+  private pendingOAuthState: string | undefined;
 
   constructor(private readonly deps: GoogleCalendarServiceDeps) {
     this.now = deps.now ?? (() => new Date());
   }
 
   buildConsentUrl(): string {
-    return this.deps.oauthClient.buildConsentUrl();
+    const state = randomBytes(32).toString('base64url');
+    this.pendingOAuthState = state;
+    return this.deps.oauthClient.buildConsentUrl(state);
   }
 
-  async completeSetup(code: string): Promise<void> {
+  async completeSetup(code: string, state: string | undefined): Promise<void> {
+    if (!this.isValidState(state)) {
+      throw new InvalidOAuthStateError();
+    }
+    // uso único: consumido na validação, confira ou não — reenvio do mesmo
+    // callback (replay) não pode trocar código de novo com o state antigo.
+    this.pendingOAuthState = undefined;
+
     const tokenSet = await this.deps.oauthClient.exchangeCode(code);
     if (!tokenSet.refreshToken) {
       // Sem `prompt=consent` na URL de setup o Google só reemite o refresh_token
@@ -95,6 +123,15 @@ export class GoogleCalendarService {
       expiry: tokenSet.expiry,
       scopes: tokenSet.scopes,
     });
+  }
+
+  /** Comparação em tempo constante — mesmo padrão do filtro de JID (SECURITY.md §2), aqui contra adivinhação do state por timing. */
+  private isValidState(received: string | undefined): boolean {
+    if (!received || !this.pendingOAuthState) return false;
+    const expectedBuf = Buffer.from(this.pendingOAuthState);
+    const receivedBuf = Buffer.from(received);
+    if (expectedBuf.length !== receivedBuf.length) return false;
+    return timingSafeEqual(expectedBuf, receivedBuf);
   }
 
   /**
@@ -126,7 +163,16 @@ export class GoogleCalendarService {
       );
       return refreshed.accessToken;
     } catch (err) {
-      this.deps.logger.error({ err }, 'falha ao renovar token de acesso ao Google Calendar');
+      // `err` nunca entra bruto no log: é erro gaxios/googleapis, cujo
+      // serializer padrão do pino expande `config.data`/`headers`, onde vai
+      // o corpo da requisição de refresh — refresh_token e client_secret em
+      // texto plano (SECURITY.md §4). Só provider + mensagem já bastam para
+      // investigar; mesmo padrão do email-alerter.ts.
+      const message = err instanceof Error ? err.message : 'erro desconhecido';
+      this.deps.logger.error(
+        { provider: GOOGLE_CALENDAR_PROVIDER, message },
+        'falha ao renovar token de acesso ao Google Calendar',
+      );
       await this.deps.alerter.alertRefreshFailure({ provider: GOOGLE_CALENDAR_PROVIDER, err });
       throw new GoogleTokenRefreshError(err);
     }
@@ -177,28 +223,53 @@ export class GoogleCalendarService {
     return { gcalId: inserted.gcalId };
   }
 
+  /**
+   * item + event + cadeia numa única transação (mesmo padrão do
+   * `capture-service`, achado de review pós-merge): sem isso um crash no
+   * meio da sequência deixa item sem event ou event sem cadeia, e um retry
+   * subsequente — sem idempotência nenhuma nesse meio-termo — duplicaria o
+   * item para o mesmo compromisso do Google. O índice único parcial em
+   * `events.gcal_id` (migração 006 de `tasks`) é a segunda linha de defesa:
+   * se dois disparos concorrentes passarem pelo `findByGcalId` antes de um
+   * deles escrever, o segundo insert estoura `SQLITE_CONSTRAINT` e vira
+   * skip silencioso em vez de duplicar.
+   */
   private syncEvent(googleEvent: GoogleCalendarEvent): void {
-    const decision = mapGoogleEventToSync(googleEvent, (gcalId) => Boolean(this.deps.eventService.findByGcalId(gcalId)));
-    if (decision.action === 'skip') return;
+    const run = this.deps.db.transaction(() => {
+      const decision = mapGoogleEventToSync(googleEvent, (gcalId) => Boolean(this.deps.eventService.findByGcalId(gcalId)));
+      if (decision.action === 'skip') return;
 
-    const item = this.deps.itemService.create({
-      type: 'compromisso',
-      title: googleEvent.title,
-      origin: 'google_calendar',
-      status: 'ativa',
-      dueAt: decision.startAt,
+      const item = this.deps.itemService.create({
+        type: 'compromisso',
+        title: googleEvent.title,
+        origin: 'google_calendar',
+        status: 'ativa',
+        dueAt: decision.startAt,
+      });
+
+      const event = this.deps.eventService.create({
+        itemId: item.id,
+        title: googleEvent.title,
+        startAt: decision.startAt,
+        deslocamentoMin: this.deps.getDeslocamentoMinDefault(),
+        gcalId: googleEvent.gcalId,
+        ...(decision.endAt !== undefined ? { endAt: decision.endAt } : {}),
+        ...(googleEvent.location !== undefined ? { local: googleEvent.location } : {}),
+      });
+
+      this.deps.chainService.scheduleForEvent(event);
     });
 
-    const event = this.deps.eventService.create({
-      itemId: item.id,
-      title: googleEvent.title,
-      startAt: decision.startAt,
-      deslocamentoMin: this.deps.getDeslocamentoMinDefault(),
-      gcalId: googleEvent.gcalId,
-      ...(decision.endAt !== undefined ? { endAt: decision.endAt } : {}),
-      ...(googleEvent.location !== undefined ? { local: googleEvent.location } : {}),
-    });
-
-    this.deps.chainService.scheduleForEvent(event);
+    try {
+      run();
+    } catch (err) {
+      if (isUniqueConstraintError(err)) return;
+      throw err;
+    }
   }
+}
+
+/** `gcal_id` duplicado sob corrida (dois disparos de sync passaram no `findByGcalId` antes de qualquer um escrever) — a transação inteira desfaz e o evento fica pra próxima leitura, sem duplicar. */
+function isUniqueConstraintError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'SqliteError' && err.message.includes('UNIQUE constraint failed');
 }

@@ -1,5 +1,24 @@
 # Perfil "producao" (ADR-013) — única porta exposta no host (SECURITY.md §5).
 # Não exercitado no M1 (operação local); domínio real entra no hardening.
+#
+# Só /webhook/evolution* e /health são superfície pública (SECURITY.md §5)
+# — as rotas /setup/google* (FEAT-005) trocam code por tokens sem sessão
+# nem filtro de JID; são operação local única (ADR-013) e nunca devem ser
+# alcançáveis pela internet, mesmo com o domínio publicado. O bind do brain
+# no host já é 127.0.0.1-only (docker-compose.yml), mas o brain:3000 segue
+# alcançável pela rede interna do Compose, então o filtro precisa estar
+# aqui também — reverse_proxy sem matcher encaminharia tudo, /setup/*
+# incluído. Setup manual do dono usa túnel SSH direto à porta local.
 {$NORTE_DOMAIN} {
-	reverse_proxy brain:3000
+	handle /webhook/evolution* {
+		reverse_proxy brain:3000
+	}
+
+	handle /health {
+		reverse_proxy brain:3000
+	}
+
+	handle {
+		respond 404
+	}
 }

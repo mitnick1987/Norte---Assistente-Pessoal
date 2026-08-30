@@ -248,8 +248,9 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   });
 
   // Rotas administrativas de setup único (spec FEAT-005, impacto técnico):
-  // fora do webhook público, sem filtro de JID — nunca publicadas atrás do
-  // Caddy (SECURITY.md §5), só acessíveis localmente/por túnel SSH.
+  // fora do webhook público, sem filtro de JID — o infra/Caddyfile expõe
+  // publicamente só /webhook/evolution* e /health (404 para o resto), então
+  // /setup/* só responde a quem chega direto na porta local/túnel SSH.
   if (googleCalendarModule) {
     registerGoogleCalendarSetupRoutes(fastify, googleCalendarModule.service);
   }

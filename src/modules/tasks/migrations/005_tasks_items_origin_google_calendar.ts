@@ -7,6 +7,14 @@ import type { Migration } from '../../../core/kernel/types.js';
  * `google_calendar` (FEAT-005: item nascido da sincronização de leitura da
  * agenda externa, nunca de captura pelo próprio dono) — todo o resto do
  * schema da 001 é preservado byte a byte, inclusive os índices.
+ *
+ * `INSERT ... SELECT` lista as colunas explicitamente dos dois lados de
+ * propósito: as migrações 002/003 adicionaram `source_message_id` e
+ * `source_item_index` via `ALTER TABLE ADD COLUMN`, que anexa a coluna ao
+ * FINAL da tabela viva — a ordem real diverge da ordem declarada aqui em
+ * `items_new`. Um `SELECT *` posicional copiaria valor para a coluna errada
+ * silenciosamente (sem erro do SQLite) e corromperia os campos de
+ * idempotência do ADR-018 em qualquer base com itens já capturados.
  */
 export const tasksItemsOriginGoogleCalendar005: Migration = {
   id: 'tasks_005_items_origin_google_calendar',
@@ -28,7 +36,14 @@ export const tasksItemsOriginGoogleCalendar005: Migration = {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
-      INSERT INTO items_new SELECT * FROM items;
+      INSERT INTO items_new (
+        id, type, title, origin, status, priority, due_at, snooze_count,
+        source_message_id, source_item_index, created_at, updated_at
+      )
+      SELECT
+        id, type, title, origin, status, priority, due_at, snooze_count,
+        source_message_id, source_item_index, created_at, updated_at
+      FROM items;
 
       DROP TABLE items;
       ALTER TABLE items_new RENAME TO items;
@@ -58,7 +73,14 @@ export const tasksItemsOriginGoogleCalendar005: Migration = {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
-      INSERT INTO items_old SELECT * FROM items WHERE origin != 'google_calendar';
+      INSERT INTO items_old (
+        id, type, title, origin, status, priority, due_at, snooze_count,
+        source_message_id, source_item_index, created_at, updated_at
+      )
+      SELECT
+        id, type, title, origin, status, priority, due_at, snooze_count,
+        source_message_id, source_item_index, created_at, updated_at
+      FROM items WHERE origin != 'google_calendar';
 
       DROP TABLE items;
       ALTER TABLE items_old RENAME TO items;

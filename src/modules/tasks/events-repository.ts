@@ -83,9 +83,18 @@ export class EventsRepository {
     return row;
   }
 
-  /** Deduplicação da sincronização de leitura (FEAT-005, spec item 3): evento do Google já visto não gera `event` interno nem cadeia de novo. */
+  /**
+   * Deduplicação da sincronização de leitura (FEAT-005, spec item 3): evento
+   * do Google já visto não gera `event` interno nem cadeia de novo. Filtra
+   * só `status = 'ativo'` de propósito — um evento cancelado (drop do item
+   * pelo dono) mantém o `gcal_id` por ser deleção lógica (ADR-009), mas não
+   * pode bloquear o re-sync para sempre: se o compromisso persistir/
+   * reaparecer na agenda do Google, o dono volta a ser lembrado.
+   */
   findByGcalId(gcalId: string): EventRecord | undefined {
-    const row = this.db.prepare<[string], EventRow>('SELECT * FROM events WHERE gcal_id = ?').get(gcalId);
+    const row = this.db
+      .prepare<[string], EventRow>(`SELECT * FROM events WHERE gcal_id = ? AND status = 'ativo'`)
+      .get(gcalId);
     return row ? toRecord(row) : undefined;
   }
 

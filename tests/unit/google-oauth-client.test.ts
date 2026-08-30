@@ -13,7 +13,7 @@ describe('GoogleOAuthClient — URL de consent (spec item 1, ADR-010)', () => {
   it('solicita exatamente o escopo calendar.events, nunca calendar completo', () => {
     const client = buildClient();
 
-    const url = new URL(client.buildConsentUrl());
+    const url = new URL(client.buildConsentUrl('state-de-teste'));
 
     expect(GOOGLE_CALENDAR_SCOPE).toBe('https://www.googleapis.com/auth/calendar.events');
     expect(url.searchParams.get('scope')).toBe(GOOGLE_CALENDAR_SCOPE);
@@ -22,9 +22,17 @@ describe('GoogleOAuthClient — URL de consent (spec item 1, ADR-010)', () => {
   it('força access_type=offline e prompt=consent — sem isso o Google só reemite refresh_token na primeira autorização', () => {
     const client = buildClient();
 
-    const url = new URL(client.buildConsentUrl());
+    const url = new URL(client.buildConsentUrl('state-de-teste'));
 
     expect(url.searchParams.get('access_type')).toBe('offline');
     expect(url.searchParams.get('prompt')).toBe('consent');
+  });
+
+  it('propaga o state recebido para a URL de consent (mitigação CSRF/injeção de código do callback)', () => {
+    const client = buildClient();
+
+    const url = new URL(client.buildConsentUrl('state-imprevisivel-123'));
+
+    expect(url.searchParams.get('state')).toBe('state-imprevisivel-123');
   });
 });

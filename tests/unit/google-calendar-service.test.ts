@@ -16,6 +16,7 @@ import { TokenCipher } from '../../src/modules/integrations/google-calendar/toke
 import {
   GoogleCalendarService,
   GoogleTokenRefreshError,
+  InvalidOAuthStateError,
 } from '../../src/modules/integrations/google-calendar/google-calendar-service.js';
 import { AuthTokenNotFoundError } from '../../src/modules/integrations/google-calendar/domain/index.js';
 import type { GoogleOAuthPort, GoogleTokenSet } from '../../src/modules/integrations/google-calendar/google-oauth-client.js';
@@ -46,7 +47,7 @@ function buildContext(oauthOverrides: Partial<GoogleOAuthPort> = {}) {
   const cipher = new TokenCipher(randomKey());
 
   const oauthClient: GoogleOAuthPort = {
-    buildConsentUrl: vi.fn(() => 'https://accounts.google.com/consent'),
+    buildConsentUrl: vi.fn((state: string) => `https://accounts.google.com/consent?state=${state}`),
     exchangeCode: vi.fn(),
     refresh: vi.fn(),
     listEventsToday: vi.fn().mockResolvedValue([]),
@@ -62,6 +63,7 @@ function buildContext(oauthOverrides: Partial<GoogleOAuthPort> = {}) {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
   const service = new GoogleCalendarService({
+    db,
     tokensRepository,
     oauthClient,
     cipher,
@@ -74,7 +76,14 @@ function buildContext(oauthOverrides: Partial<GoogleOAuthPort> = {}) {
     now: () => FIXED_NOW,
   });
 
-  return { db, service, tokensRepository, cipher, oauthClient, alerter, eventService, itemService, jobRepository };
+  return { db, service, tokensRepository, cipher, oauthClient, alerter, eventService, itemService, jobRepository, chainService };
+}
+
+/** Extrai o `state` real gerado por `buildConsentUrl` — o teste nunca deve inventar um valor, senão não exercita a validação de verdade. */
+function stateFromConsentUrl(url: string): string {
+  const state = new URL(url).searchParams.get('state');
+  if (!state) throw new Error('buildConsentUrl não gerou state — stub desatualizado');
+  return state;
 }
 
 function validTokenSet(overrides: Partial<GoogleTokenSet> = {}): GoogleTokenSet {
@@ -93,7 +102,8 @@ describe('GoogleCalendarService — setup e refresh de token (spec itens 1 e 2)'
       exchangeCode: vi.fn().mockResolvedValue(validTokenSet()),
     });
 
-    await service.completeSetup('codigo-de-consentimento');
+    const state = stateFromConsentUrl(service.buildConsentUrl());
+    await service.completeSetup('codigo-de-consentimento', state);
 
     expect(oauthClient.exchangeCode).toHaveBeenCalledWith('codigo-de-consentimento');
     const stored = tokensRepository.findByProvider('google_calendar');
@@ -108,7 +118,50 @@ describe('GoogleCalendarService — setup e refresh de token (spec itens 1 e 2)'
       exchangeCode: vi.fn().mockResolvedValue(validTokenSet({ refreshToken: undefined })),
     });
 
-    await expect(service.completeSetup('codigo')).rejects.toThrow(/refresh_token/);
+    const state = stateFromConsentUrl(service.buildConsentUrl());
+    await expect(service.completeSetup('codigo', state)).rejects.toThrow(/refresh_token/);
+  });
+
+  it('completeSetup rejeita callback sem state, sem sequer chamar exchangeCode', async () => {
+    const { service, oauthClient } = buildContext({
+      exchangeCode: vi.fn().mockResolvedValue(validTokenSet()),
+    });
+    service.buildConsentUrl();
+
+    await expect(service.completeSetup('codigo', undefined)).rejects.toThrow(InvalidOAuthStateError);
+    expect(oauthClient.exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('completeSetup rejeita callback com state divergente do gerado (CSRF/injeção de código)', async () => {
+    const { service, oauthClient } = buildContext({
+      exchangeCode: vi.fn().mockResolvedValue(validTokenSet()),
+    });
+    service.buildConsentUrl();
+
+    await expect(service.completeSetup('codigo', 'state-forjado-pelo-atacante')).rejects.toThrow(InvalidOAuthStateError);
+    expect(oauthClient.exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('completeSetup rejeita callback sem nenhum setup em andamento (nenhum buildConsentUrl chamado antes)', async () => {
+    const { service, oauthClient } = buildContext({
+      exchangeCode: vi.fn().mockResolvedValue(validTokenSet()),
+    });
+
+    await expect(service.completeSetup('codigo', 'qualquer-state')).rejects.toThrow(InvalidOAuthStateError);
+    expect(oauthClient.exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('state é de uso único: segundo callback com o mesmo state (replay) é rejeitado', async () => {
+    const { service, oauthClient } = buildContext({
+      exchangeCode: vi.fn().mockResolvedValue(validTokenSet()),
+    });
+    const state = stateFromConsentUrl(service.buildConsentUrl());
+
+    await service.completeSetup('codigo-original', state);
+    (oauthClient.exchangeCode as ReturnType<typeof vi.fn>).mockClear();
+
+    await expect(service.completeSetup('codigo-replay', state)).rejects.toThrow(InvalidOAuthStateError);
+    expect(oauthClient.exchangeCode).not.toHaveBeenCalled();
   });
 
   it('token ainda válido não dispara refresh desnecessário', async () => {
@@ -320,6 +373,67 @@ describe('GoogleCalendarService — sincronização mínima com cadeias (spec it
     expect(events).toBeDefined();
     const allPendingReminders = jobRepository.findPending().filter((j) => j.type === 'reminder');
     expect(allPendingReminders).toHaveLength(3);
+  });
+
+  it('rodar o sync duas vezes com o mesmo evento do Google não duplica item nem event na tabela (não só o lookup)', async () => {
+    const { db, service, tokensRepository, cipher } = buildContext({
+      listEventsToday: vi.fn().mockResolvedValue([
+        {
+          gcalId: 'gcal-duplo',
+          title: 'Reunião recorrente',
+          start: { dateTime: '2026-09-04T10:00:00-03:00' },
+          end: { dateTime: '2026-09-04T11:00:00-03:00' },
+        },
+      ]),
+    });
+    tokensRepository.upsert({
+      provider: 'google_calendar',
+      accessTokenEncrypted: cipher.encrypt('access-token'),
+      refreshTokenEncrypted: cipher.encrypt('refresh-token'),
+      expiry: new Date(FIXED_NOW.getTime() + 3_600_000),
+      scopes: 'https://www.googleapis.com/auth/calendar.events',
+    });
+
+    await service.listTodayAndSync();
+    await service.listTodayAndSync();
+    await service.listTodayAndSync();
+
+    const eventRows = db.prepare(`SELECT COUNT(*) as c FROM events WHERE gcal_id = 'gcal-duplo'`).get() as { c: number };
+    const itemRows = db.prepare(`SELECT COUNT(*) as c FROM items WHERE origin = 'google_calendar'`).get() as { c: number };
+    expect(eventRows.c).toBe(1);
+    expect(itemRows.c).toBe(1);
+  });
+
+  it('falha no meio da sincronização (item+event+cadeia) desfaz tudo — nunca deixa item sem event', async () => {
+    const { db, service, tokensRepository, cipher, chainService } = buildContext({
+      listEventsToday: vi.fn().mockResolvedValue([
+        {
+          gcalId: 'gcal-crash',
+          title: 'Reunião instável',
+          start: { dateTime: '2026-09-04T10:00:00-03:00' },
+          end: { dateTime: '2026-09-04T11:00:00-03:00' },
+        },
+      ]),
+    });
+    tokensRepository.upsert({
+      provider: 'google_calendar',
+      accessTokenEncrypted: cipher.encrypt('access-token'),
+      refreshTokenEncrypted: cipher.encrypt('refresh-token'),
+      expiry: new Date(FIXED_NOW.getTime() + 3_600_000),
+      scopes: 'https://www.googleapis.com/auth/calendar.events',
+    });
+    vi.spyOn(chainService, 'scheduleForEvent').mockImplementation(() => {
+      throw new Error('falha simulada na expansão da cadeia');
+    });
+
+    // a falha real nunca é mascarada (mesmo princípio do refresh de token) —
+    // o que este teste garante é que ela não deixa estado parcial gravado.
+    await expect(service.listTodayAndSync()).rejects.toThrow('falha simulada na expansão da cadeia');
+
+    const eventRows = db.prepare(`SELECT COUNT(*) as c FROM events WHERE gcal_id = 'gcal-crash'`).get() as { c: number };
+    const itemRows = db.prepare(`SELECT COUNT(*) as c FROM items WHERE origin = 'google_calendar'`).get() as { c: number };
+    expect(eventRows.c).toBe(0);
+    expect(itemRows.c).toBe(0);
   });
 
   it('evento do Google sem horário (dia inteiro) não gera event interno nem cadeia', async () => {
