@@ -161,7 +161,10 @@ describe('suite de segurança/isolamento do webhook (TESTING.md §3)', () => {
     expect(second.statusCode).toBe(200);
     expect(JSON.parse(second.body)).toMatchObject({ deduped: true });
 
-    expect(messagesCount(app)).toBe(1);
+    // 1 mensagem de entrada (dedup) + 1 registro de uso da triagem (RF-15) —
+    // a segunda entrega é bloqueada pelo dedup antes de chegar à triagem, e
+    // por isso não soma mais nenhuma linha em nenhuma das duas tabelas.
+    expect(messagesCount(app)).toBe(2);
     expect(outboxCount(app)).toBe(1);
   });
 

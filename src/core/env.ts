@@ -33,6 +33,10 @@ const envSchema = z.object({
 
   SMTP_URL: z.string().optional(),
   ALERT_EMAIL: z.string().email().optional(),
+
+  // Área sensível (FEAT-002, SECURITY.md): chave de API em texto, nunca em
+  // log — redigida no logger (core/logger.ts) mesmo em debug.
+  ANTHROPIC_API_KEY: z.string().min(1),
 });
 
 export type Env = z.infer<typeof envSchema>;

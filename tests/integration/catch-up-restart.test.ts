@@ -34,9 +34,10 @@ describe('catch-up de job vencido no boot (ADR-004)', () => {
     firstApp = buildAppOnSameDb(env);
 
     const overdueAt = new Date(Date.now() - 60_000).toISOString();
+    const payload = JSON.stringify({ itemId: 1, title: 'pagar boleto' });
     firstApp.db
-      .prepare(`INSERT INTO jobs (type, payload, next_run_at, status, attempts) VALUES ('reminder', '{}', ?, 'pending', 0)`)
-      .run(overdueAt);
+      .prepare(`INSERT INTO jobs (type, payload, next_run_at, status, attempts) VALUES ('reminder', ?, ?, 'pending', 0)`)
+      .run(payload, overdueAt);
 
     // "processo caiu" — fecha só o fastify da primeira instância, mantendo o arquivo do banco.
     await firstApp.fastify.close();
@@ -44,14 +45,12 @@ describe('catch-up de job vencido no boot (ADR-004)', () => {
     secondApp = buildAppOnSameDb(env);
     await secondApp.scheduler.runCatchUp();
 
-    const job = secondApp.db.prepare('SELECT status FROM jobs WHERE type = ?').get('reminder') as {
-      status: string;
-    };
-
-    // sem handler registrado para "reminder" nesta fundação, o job não é
-    // marcado running/confirmed — o que importa aqui é que o catch-up o
-    // selecionou e tentou processar, sem lançar nem travar o boot.
-    expect(job.status).toBe('pending');
+    // handler real do módulo capture (RF-03): job vencido processado no
+    // boot enfileira o lembrete no outbox, sem esperar o próximo poll de 30s.
+    const outboxRow = secondApp.db.prepare(`SELECT body FROM outbox_messages WHERE body LIKE 'Lembrete:%'`).get() as
+      | { body: string }
+      | undefined;
+    expect(outboxRow?.body).toBe('Lembrete: pagar boleto');
   });
 
   it('não duplica disparo de job que já tinha delivered_at antes do restart', async () => {
@@ -60,12 +59,13 @@ describe('catch-up de job vencido no boot (ADR-004)', () => {
 
     const overdueAt = new Date(Date.now() - 60_000).toISOString();
     const deliveredAt = new Date(Date.now() - 30_000).toISOString();
+    const payload = JSON.stringify({ itemId: 1, title: 'pagar boleto' });
     firstApp.db
       .prepare(
         `INSERT INTO jobs (type, payload, next_run_at, status, attempts, delivered_at)
-         VALUES ('reminder', '{}', ?, 'confirmed', 1, ?)`,
+         VALUES ('reminder', ?, ?, 'confirmed', 1, ?)`,
       )
-      .run(overdueAt, deliveredAt);
+      .run(payload, overdueAt, deliveredAt);
 
     await firstApp.fastify.close();
 
@@ -78,5 +78,8 @@ describe('catch-up de job vencido no boot (ADR-004)', () => {
     };
     expect(job.status).toBe('confirmed');
     expect(job.delivered_at).toBe(deliveredAt);
+
+    const outboxCount = secondApp.db.prepare('SELECT COUNT(*) as c FROM outbox_messages').get() as { c: number };
+    expect(outboxCount.c).toBe(0);
   });
 });

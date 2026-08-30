@@ -27,6 +27,7 @@ export function buildTestEnv(overrides: TestAppOverrides = {}): Env {
     DAILY_PROACTIVE_CAP: 6,
     SMTP_URL: undefined,
     ALERT_EMAIL: undefined,
+    ANTHROPIC_API_KEY: 'test-anthropic-api-key',
     ...overrides,
   };
 }
