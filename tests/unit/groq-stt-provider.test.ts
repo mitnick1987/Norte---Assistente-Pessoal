@@ -29,6 +29,41 @@ describe('GroqSttProvider', () => {
     expect(fetchFn).toHaveBeenCalled();
   });
 
+  it('anexa o áudio com filename com extensão correta (Groq infere formato pela extensão, não pelo Content-Type)', async () => {
+    let sentFile: File | undefined;
+    const fetchFn = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const form = init?.body as FormData;
+      sentFile = form.get('file') as File;
+      return jsonResponse(200, { text: 'oi' });
+    });
+    const provider = new GroqSttProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await provider.transcribe({ audioBase64: 'QUFB', mimeType: 'audio/ogg; codecs=opus' });
+
+    expect(sentFile).toBeDefined();
+    expect(sentFile!.name).toBe('audio.ogg');
+  });
+
+  it.each([
+    ['audio/ogg', 'audio.ogg'],
+    ['audio/mpeg', 'audio.mp3'],
+    ['audio/mp4', 'audio.m4a'],
+    ['audio/wav', 'audio.wav'],
+    ['audio/webm', 'audio.webm'],
+  ])('filename enviado para mimeType %s é %s', async (mimeType, expectedFilename) => {
+    let sentFile: File | undefined;
+    const fetchFn = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const form = init?.body as FormData;
+      sentFile = form.get('file') as File;
+      return jsonResponse(200, { text: 'oi' });
+    });
+    const provider = new GroqSttProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await provider.transcribe({ audioBase64: 'QUFB', mimeType });
+
+    expect(sentFile!.name).toBe(expectedFilename);
+  });
+
   it('erro HTTP (4xx/5xx) vira SttRequestError, não derruba o processo', async () => {
     const fetchFn = vi.fn(async () => jsonResponse(500, { error: { message: 'internal error' } }));
     const provider = new GroqSttProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });

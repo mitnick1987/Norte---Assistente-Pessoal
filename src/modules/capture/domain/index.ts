@@ -9,5 +9,5 @@ export {
 } from './tone-templates.js';
 export type { CaptureConfirmationItem } from './tone-templates.js';
 export { buildPointReminderMessage } from './reminder-template.js';
-export { exceedsAudioLimits } from './audio-limits.js';
+export { exceedsAudioLimits, exceedsRealSizeLimit } from './audio-limits.js';
 export type { AudioLimits, AudioToCheck } from './audio-limits.js';

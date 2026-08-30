@@ -121,6 +121,33 @@ describe('AudioCaptureService.processAudio (fluxo normal, spec FEAT-003 item 3)'
     expect(body!.toLowerCase()).toContain('texto');
   });
 
+  it('mídia real acima do teto de bytes: nenhuma chamada a STT mesmo com metadado ausente/subdimensionado (defesa contra metadado não confiável)', async () => {
+    const { db, messageRepository, outboxRepository, messageId } = buildContext();
+    const bigBase64 = Buffer.alloc(21 * 1024 * 1024).toString('base64');
+    const mediaFetcher = { getBase64FromMediaMessage: vi.fn(async () => bigBase64) };
+    const sttRouter = { transcribe: vi.fn(async () => ({ kind: 'ok' as const, text: 'x' })) };
+    const dispatchText = vi.fn(async () => undefined);
+
+    const service = new AudioCaptureService({
+      mediaFetcher,
+      sttRouter: sttRouter as unknown as SttRouter,
+      messageRepository,
+      outboxRepository,
+      logger,
+      getAudioLimits: () => LIMITS,
+      dispatchText,
+      now: () => new Date(0),
+    });
+
+    // metadado do webhook ausente — só o tamanho real buscado é confiável.
+    await service.processAudio({ mimeType: 'audio/ogg', durationSeconds: undefined, fileLengthBytes: undefined }, { id: 'x' }, JID, messageId);
+
+    expect(mediaFetcher.getBase64FromMediaMessage).toHaveBeenCalled();
+    expect(sttRouter.transcribe).not.toHaveBeenCalled();
+    expect(dispatchText).not.toHaveBeenCalled();
+    expect(lastOutboxBody(db)).toBeDefined();
+  });
+
   it('erro de busca de mídia (MediaUnavailableError) propaga no fluxo normal', async () => {
     const { messageRepository, outboxRepository, messageId } = buildContext();
     const mediaFetcher = stubMediaFetcher(async () => {
@@ -261,6 +288,28 @@ describe('AudioCaptureService.recoverAudio (varredura de recuperação, spec FEA
     ).rejects.toBeInstanceOf(SttTotalFailureError);
 
     expect(lastOutboxBody(db)).toBeDefined();
+  });
+
+  it('não aplica o teto de bytes reais na recuperação (mesma regra do item 4: não recusa algo que já estava em voo)', async () => {
+    const { messageRepository, outboxRepository, messageId } = buildContext();
+    const bigBase64 = Buffer.alloc(21 * 1024 * 1024).toString('base64');
+    const mediaFetcher = stubMediaFetcher(async () => bigBase64);
+    const sttRouter = stubSttRouter(async () => ({ kind: 'ok', text: 'áudio grande recuperado após restart' }));
+    const dispatchText = vi.fn(async () => undefined);
+
+    const service = new AudioCaptureService({
+      mediaFetcher,
+      sttRouter,
+      messageRepository,
+      outboxRepository,
+      logger,
+      getAudioLimits: () => LIMITS,
+      dispatchText,
+    });
+
+    await service.recoverAudio({ messageKey: { id: 'x' }, mimeType: 'audio/ogg' }, JID, messageId);
+
+    expect(dispatchText).toHaveBeenCalledWith('áudio grande recuperado após restart', JID, messageId);
   });
 
   it('não aplica checagem de limite (spec item 4: mensagem já passou dessa fase antes do crash, ou o limite mudou desde então)', async () => {

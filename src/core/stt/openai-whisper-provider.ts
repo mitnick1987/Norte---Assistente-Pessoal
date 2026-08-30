@@ -1,5 +1,7 @@
+import type { Logger } from 'pino';
 import { SttRequestError, SttTimeoutError, type SttProvider, type SttTranscriptionRequest, type SttTranscriptionResult } from './provider.js';
 import { bufferFromBase64, parseTranscriptionResponse } from './groq-provider.js';
+import { extFromMime } from './mime.js';
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const OPENAI_MODEL = 'whisper-1';
@@ -7,6 +9,7 @@ const OPENAI_MODEL = 'whisper-1';
 export interface OpenAiWhisperProviderConfig {
   readonly apiKey: string;
   readonly timeoutMs?: number;
+  readonly logger?: Logger;
   /** Injetável para teste — nunca fetch global real no caminho testado (TESTING.md §7). */
   readonly fetchFn?: typeof fetch;
 }
@@ -31,7 +34,8 @@ export class OpenAiWhisperProvider implements SttProvider {
 
     const form = new FormData();
     form.append('model', OPENAI_MODEL);
-    form.append('file', bufferFromBase64(request.audioBase64, request.mimeType));
+    const ext = extFromMime(request.mimeType, this.config.logger);
+    form.append('file', bufferFromBase64(request.audioBase64, request.mimeType), `audio.${ext}`);
 
     let response: Response;
     try {

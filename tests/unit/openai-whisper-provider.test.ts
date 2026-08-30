@@ -6,30 +6,65 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-describe('OpenAiWhisperProvider (fallback, ADR-017)', () => {
+describe('OpenAiWhisperProvider', () => {
   it('extrai o texto transcrito da resposta', async () => {
-    const fetchFn = vi.fn(async () => jsonResponse(200, { text: 'marcar dentista sexta' }));
+    const fetchFn = vi.fn(async () => jsonResponse(200, { text: 'lembra de comprar ração amanhã' }));
     const provider = new OpenAiWhisperProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
 
     const result = await provider.transcribe({ audioBase64: 'QUFB', mimeType: 'audio/ogg' });
 
-    expect(result.text).toBe('marcar dentista sexta');
+    expect(result.text).toBe('lembra de comprar ração amanhã');
   });
 
-  it('nunca inclui a api key em nenhum campo do corpo, só no header Authorization', async () => {
+  it('envia a api key só no header Authorization, nunca no corpo', async () => {
     const fetchFn = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const headers = init?.headers as Record<string, string>;
-      expect(headers.Authorization).toBe('Bearer chave-openai-secreta');
+      expect(headers.Authorization).toBe('Bearer minha-chave-secreta');
       return jsonResponse(200, { text: 'oi' });
     });
-    const provider = new OpenAiWhisperProvider({ apiKey: 'chave-openai-secreta', fetchFn: fetchFn as unknown as typeof fetch });
+    const provider = new OpenAiWhisperProvider({ apiKey: 'minha-chave-secreta', fetchFn: fetchFn as unknown as typeof fetch });
 
     await provider.transcribe({ audioBase64: 'QUFB', mimeType: 'audio/ogg' });
 
     expect(fetchFn).toHaveBeenCalled();
   });
 
-  it('erro HTTP (4xx/5xx) vira SttRequestError', async () => {
+  it('anexa o áudio com filename com extensão correta (OpenAI infere formato pela extensão, não pelo Content-Type)', async () => {
+    let sentFile: File | undefined;
+    const fetchFn = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const form = init?.body as FormData;
+      sentFile = form.get('file') as File;
+      return jsonResponse(200, { text: 'oi' });
+    });
+    const provider = new OpenAiWhisperProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await provider.transcribe({ audioBase64: 'QUFB', mimeType: 'audio/ogg; codecs=opus' });
+
+    expect(sentFile).toBeDefined();
+    expect(sentFile!.name).toBe('audio.ogg');
+  });
+
+  it.each([
+    ['audio/ogg', 'audio.ogg'],
+    ['audio/mpeg', 'audio.mp3'],
+    ['audio/mp4', 'audio.m4a'],
+    ['audio/wav', 'audio.wav'],
+    ['audio/webm', 'audio.webm'],
+  ])('filename enviado para mimeType %s é %s', async (mimeType, expectedFilename) => {
+    let sentFile: File | undefined;
+    const fetchFn = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const form = init?.body as FormData;
+      sentFile = form.get('file') as File;
+      return jsonResponse(200, { text: 'oi' });
+    });
+    const provider = new OpenAiWhisperProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await provider.transcribe({ audioBase64: 'QUFB', mimeType });
+
+    expect(sentFile!.name).toBe(expectedFilename);
+  });
+
+  it('erro HTTP (4xx/5xx) vira SttRequestError, não derruba o processo', async () => {
     const fetchFn = vi.fn(async () => jsonResponse(500, { error: { message: 'internal error' } }));
     const provider = new OpenAiWhisperProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
 
@@ -40,6 +75,13 @@ describe('OpenAiWhisperProvider (fallback, ADR-017)', () => {
     const fetchFn = vi.fn(
       async () => new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'Content-Type': 'text/html' } }),
     );
+    const provider = new OpenAiWhisperProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await expect(provider.transcribe({ audioBase64: 'QUFB', mimeType: 'audio/ogg' })).rejects.toThrow(SttRequestError);
+  });
+
+  it('resposta 2xx sem o campo "text" vira SttRequestError', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, {}));
     const provider = new OpenAiWhisperProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
 
     await expect(provider.transcribe({ audioBase64: 'QUFB', mimeType: 'audio/ogg' })).rejects.toThrow(SttRequestError);

@@ -101,8 +101,8 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   // desativa o primário (o router nem tenta chamá-lo); OPENAI_API_KEY
   // ausente só desativa o fallback — nenhuma das duas é erro de boot.
   const sttRouter = new SttRouter({
-    primary: env.GROQ_API_KEY ? new GroqSttProvider({ apiKey: env.GROQ_API_KEY }) : undefined,
-    fallback: env.OPENAI_API_KEY ? new OpenAiWhisperProvider({ apiKey: env.OPENAI_API_KEY }) : undefined,
+    primary: env.GROQ_API_KEY ? new GroqSttProvider({ apiKey: env.GROQ_API_KEY, logger }) : undefined,
+    fallback: env.OPENAI_API_KEY ? new OpenAiWhisperProvider({ apiKey: env.OPENAI_API_KEY, logger }) : undefined,
     logger,
   });
 

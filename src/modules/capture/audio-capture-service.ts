@@ -3,7 +3,13 @@ import type { AudioRecoveryData, IncomingAudio, MediaFetcher, MessageRepository 
 import { MediaUnavailableError } from '../../core/channel/whatsapp-evolution/index.js';
 import type { OutboxRepository } from '../../core/outbox/index.js';
 import type { SttRouter } from '../../core/stt/index.js';
-import { exceedsAudioLimits, pickAudioTooLongMessage, pickSttFailureMessage, type AudioLimits } from './domain/index.js';
+import {
+  exceedsAudioLimits,
+  exceedsRealSizeLimit,
+  pickAudioTooLongMessage,
+  pickSttFailureMessage,
+  type AudioLimits,
+} from './domain/index.js';
 
 export interface AudioCaptureServiceDeps {
   readonly mediaFetcher: MediaFetcher;
@@ -63,13 +69,17 @@ export class AudioCaptureService {
       return;
     }
 
-    await this.transcribeAndDispatch(messageKey, audio.mimeType, jid, messageId);
+    await this.transcribeAndDispatch(messageKey, audio.mimeType, jid, messageId, { checkRealSizeLimit: true });
   }
 
   /**
-   * Varredura de recuperação (spec item 4): sem checagem de limite — a
-   * mensagem já passou dessa fase antes do crash (ou o limite mudou desde
-   * então, o que não é motivo para recusar algo que já estava em voo).
+   * Varredura de recuperação (spec item 4): sem checagem de limite de
+   * *metadado* — a mensagem já passou dessa fase antes do crash (ou o
+   * limite mudou desde então, o que não é motivo para recusar algo que já
+   * estava em voo). O teto de bytes reais (defesa contra metadado
+   * forjado/ausente, abaixo) segue a mesma regra: não bloqueia aqui pelo
+   * mesmo motivo — recusar na recuperação um áudio que na captura original
+   * já teria passado pelo teto não protege nada, só nega um item legítimo.
    *
    * Mídia expirada (`MediaUnavailableError`) é tratada aqui, não só
    * repassada: a spec exige a MESMA mensagem de falha total pedindo texto
@@ -81,7 +91,9 @@ export class AudioCaptureService {
    */
   async recoverAudio(recoveryData: AudioRecoveryData, jid: string, messageId: number): Promise<void> {
     try {
-      await this.transcribeAndDispatch(recoveryData.messageKey, recoveryData.mimeType, jid, messageId);
+      await this.transcribeAndDispatch(recoveryData.messageKey, recoveryData.mimeType, jid, messageId, {
+        checkRealSizeLimit: false,
+      });
     } catch (err) {
       if (err instanceof MediaUnavailableError) {
         const now = this.deps.now ?? (() => new Date());
@@ -91,10 +103,26 @@ export class AudioCaptureService {
     }
   }
 
-  private async transcribeAndDispatch(messageKey: unknown, mimeType: string, jid: string, messageId: number): Promise<void> {
+  private async transcribeAndDispatch(
+    messageKey: unknown,
+    mimeType: string,
+    jid: string,
+    messageId: number,
+    options: { readonly checkRealSizeLimit: boolean },
+  ): Promise<void> {
     const now = this.deps.now ?? (() => new Date());
 
     const audioBase64 = await this.deps.mediaFetcher.getBase64FromMediaMessage(messageKey);
+
+    // Metadado do webhook (`exceedsAudioLimits`) é opcional e controlado
+    // pelo remetente — este teto usa o tamanho real da mídia já buscada,
+    // único valor que não dá pra forjar/omitir para contornar o limite de
+    // negócio (não se aplica na recuperação, ver comentário de `recoverAudio`).
+    if (options.checkRealSizeLimit && exceedsRealSizeLimit(audioBase64, this.deps.getAudioLimits())) {
+      this.deps.logger.warn({ messageId }, 'áudio acima do limite real de bytes buscado da Evolution, nenhuma chamada a STT');
+      this.deps.outboxRepository.enqueue({ jid, body: pickAudioTooLongMessage(now().getTime()), isProactive: false });
+      return;
+    }
 
     const sttResult = await this.deps.sttRouter.transcribe({ audioBase64, mimeType });
 

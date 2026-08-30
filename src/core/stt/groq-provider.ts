@@ -1,4 +1,6 @@
+import type { Logger } from 'pino';
 import { SttRequestError, SttTimeoutError, type SttProvider, type SttTranscriptionRequest, type SttTranscriptionResult } from './provider.js';
+import { extFromMime } from './mime.js';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const GROQ_MODEL = 'whisper-large-v3-turbo';
@@ -6,6 +8,7 @@ const GROQ_MODEL = 'whisper-large-v3-turbo';
 export interface GroqSttProviderConfig {
   readonly apiKey: string;
   readonly timeoutMs?: number;
+  readonly logger?: Logger;
   /** Injetável para teste — nunca fetch global real no caminho testado (TESTING.md §7). */
   readonly fetchFn?: typeof fetch;
 }
@@ -36,7 +39,8 @@ export class GroqSttProvider implements SttProvider {
 
     const form = new FormData();
     form.append('model', GROQ_MODEL);
-    form.append('file', bufferFromBase64(request.audioBase64, request.mimeType));
+    const ext = extFromMime(request.mimeType, this.config.logger);
+    form.append('file', bufferFromBase64(request.audioBase64, request.mimeType), `audio.${ext}`);
 
     let response: Response;
     try {
