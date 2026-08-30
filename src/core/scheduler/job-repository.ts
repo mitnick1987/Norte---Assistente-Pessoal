@@ -37,6 +37,13 @@ export class JobRepository {
     return this.db.prepare<[], JobRow>(`SELECT * FROM jobs WHERE status = 'pending'`).all();
   }
 
+  /** Usado por `chains` para localizar a cadeia de um evento na hora de cancelar/regenerar — filtro por tipo primeiro porque é o índice existente (`jobs_due_lookup`), o payload é lido em código depois. */
+  findPendingByType(type: string): JobRow[] {
+    return this.db
+      .prepare<[string], JobRow>(`SELECT * FROM jobs WHERE type = ? AND status = 'pending'`)
+      .all(type);
+  }
+
   findById(id: number): JobRow | undefined {
     return this.db.prepare<[number], JobRow>('SELECT * FROM jobs WHERE id = ?').get(id);
   }

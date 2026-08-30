@@ -162,16 +162,19 @@ describe('fluxo de captura de texto (FEAT-002, PRD §6 fluxo 5)', () => {
   });
 
   it('lembrete pontual dispara por template no horário simulado, sem chamada ao LLM no caminho do disparo', async () => {
+    // tipo "lembrete" (não "compromisso"): compromisso com dueAt resolvido
+    // vira event + cadeia inteira (FEAT-004) — o job avulso pontual da
+    // FEAT-002 continua existindo para os outros tipos, inalterado.
     routedStub({
       classification: 'captura',
-      items: [{ type: 'compromisso', title: 'dentista', dueExpression: 'sexta 14h' }],
+      items: [{ type: 'lembrete', title: 'ligar pro dentista', dueExpression: 'sexta 14h' }],
     });
 
     await app.fastify.inject({
       method: 'POST',
       url: '/webhook/evolution',
       headers: { 'x-webhook-secret': 'a'.repeat(32) },
-      payload: textWebhookPayload('wa-1', 'marca dentista sexta 14h'),
+      payload: textWebhookPayload('wa-1', 'lembra de ligar pro dentista sexta 14h'),
     });
     await app.waitForPendingProcessing();
     await app.outboxProcessor.processPending();
@@ -189,7 +192,7 @@ describe('fluxo de captura de texto (FEAT-002, PRD §6 fluxo 5)', () => {
     const reminderMessage = app.db
       .prepare(`SELECT body FROM outbox_messages WHERE body LIKE 'Lembrete:%'`)
       .get() as { body: string } | undefined;
-    expect(reminderMessage?.body).toBe('Lembrete: dentista');
+    expect(reminderMessage?.body).toBe('Lembrete: ligar pro dentista');
   });
 
   it('registro de tokens: chamada à triagem grava tokens_in/tokens_out/cache_read_tokens em messages', async () => {

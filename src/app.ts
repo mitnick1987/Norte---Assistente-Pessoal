@@ -26,6 +26,7 @@ import { EmailAlerter } from './infra-ops/index.js';
 import { AnthropicApiKeyProvider } from './core/llm/index.js';
 import { GroqSttProvider, OpenAiWhisperProvider, SttRouter } from './core/stt/index.js';
 import { buildTasksModule } from './modules/tasks/public/index.js';
+import { buildChainsModule } from './modules/chains/public/index.js';
 import {
   buildCaptureModule,
   PENDING_RECOVERY_THRESHOLD_MS_SETTING,
@@ -86,14 +87,31 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   const logger = createLogger(env.NODE_ENV);
   const db = openDatabase(env.DB_PATH);
 
-  // tasks nasce primeiro: capture depende do ItemService dela (contrato
-  // público, ARCHITECTURE.md §2) para gravar itens sem SQL direto.
-  const { manifest: tasksManifest, service: itemService } = buildTasksModule(db);
+  // Nasce antes dos módulos: tasks publica item.dropped/item.rescheduled
+  // aqui (ela é fundação, não pode importar chains — ADR-011), chains
+  // assina para cancelar/regenerar a cadeia (FEAT-004).
+  const eventBus = new EventBus<Record<string, unknown>>();
+
+  // tasks nasce primeiro: capture/chains dependem do ItemService/EventService
+  // dela (contrato público, ARCHITECTURE.md §2) para gravar itens/eventos
+  // sem SQL direto.
+  const { manifest: tasksManifest, service: itemService, eventService } = buildTasksModule(db, {
+    emit: (event, payload) => eventBus.emit(event, payload),
+  });
 
   const jobRepository = new JobRepository(db);
   const outboxRepository = new OutboxRepository(db);
   const messageRepository = new MessageRepository(db);
   const settings = new SettingsStore(db);
+
+  // chains nasce antes de capture: a captura de compromisso chama
+  // chainService.scheduleForEvent diretamente (Decisões tomadas da FEAT-004).
+  const { manifest: chainsManifest, service: chainService } = buildChainsModule({
+    eventService,
+    jobRepository,
+    settings,
+    ...(overrides.now ? { now: overrides.now } : {}),
+  });
 
   const llmProvider = new AnthropicApiKeyProvider({ apiKey: env.ANTHROPIC_API_KEY });
 
@@ -122,6 +140,8 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     sttRouter,
     mediaFetcher: evolutionClient,
     itemService,
+    eventService,
+    chainService,
     jobRepository,
     outboxRepository,
     messageRepository,
@@ -134,11 +154,11 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
 
   const registry = new KernelRegistry();
   registry.register(tasksManifest);
+  registry.register(chainsManifest);
   registry.register(captureManifest);
 
   runMigrations(db, [...coreMigrations, ...registry.getMigrations()]);
 
-  const eventBus = new EventBus<Record<string, unknown>>();
   registry.wireEvents(eventBus);
 
   settings.seedDefaults(registry.getSettingsDefaults());

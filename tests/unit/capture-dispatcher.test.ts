@@ -1,27 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
-import { runMigrations } from '../../src/core/db/migrator.js';
-import { coreMigrations } from '../../src/core/db/migrations/index.js';
-import { tasksMigrations } from '../../src/modules/tasks/migrations/index.js';
-import { ItemsRepository } from '../../src/modules/tasks/items-repository.js';
-import { ItemService } from '../../src/modules/tasks/item-service.js';
-import { JobRepository } from '../../src/core/scheduler/index.js';
+import type Database from 'better-sqlite3';
 import { OutboxRepository } from '../../src/core/outbox/index.js';
-import { CaptureService } from '../../src/modules/capture/capture-service.js';
 import { buildCaptureDispatcher } from '../../src/modules/capture/capture-dispatcher.js';
 import { createLogger } from '../../src/core/logger.js';
 import type { TriageService, TriageResult } from '../../src/modules/capture/triage-service.js';
+import { buildCaptureTestContext } from '../factories/capture-test-context.js';
 
 const JID = '5511999999999@s.whatsapp.net';
 const logger = createLogger('test');
 
 function buildContext() {
-  const db = new Database(':memory:');
-  runMigrations(db, [...coreMigrations, ...tasksMigrations]);
-  const itemService = new ItemService(new ItemsRepository(db));
-  const jobRepository = new JobRepository(db);
+  const { db, captureService } = buildCaptureTestContext();
   const outboxRepository = new OutboxRepository(db);
-  const captureService = new CaptureService(itemService, jobRepository, db);
   return { db, outboxRepository, captureService };
 }
 

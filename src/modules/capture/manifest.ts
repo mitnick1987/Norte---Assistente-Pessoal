@@ -7,7 +7,12 @@ import type { OutboxRepository } from '../../core/outbox/index.js';
 import type { AudioRecoveryData, IncomingAudio, MediaFetcher, MessageRepository } from '../../core/channel/index.js';
 import type { SttRouter } from '../../core/stt/index.js';
 import type { SettingsStore } from '../../core/settings/index.js';
-import type { ItemService } from '../tasks/public/index.js';
+import type { EventService, ItemService } from '../tasks/public/index.js';
+import {
+  CHAINS_DESLOCAMENTO_MIN_DEFAULT_DEFAULT,
+  CHAINS_DESLOCAMENTO_MIN_DEFAULT_SETTING,
+  type ChainService,
+} from '../chains/public/index.js';
 import type { AudioLimits } from './domain/index.js';
 import { TriageService } from './triage-service.js';
 import { CaptureService } from './capture-service.js';
@@ -20,15 +25,17 @@ export interface CaptureModuleDeps {
   readonly sttRouter: SttRouter;
   readonly mediaFetcher: MediaFetcher;
   readonly itemService: ItemService;
+  readonly eventService: EventService;
+  readonly chainService: ChainService;
   readonly jobRepository: JobRepository;
   readonly outboxRepository: OutboxRepository;
   readonly messageRepository: MessageRepository;
   readonly settings: SettingsStore;
   readonly ownerJid: string;
   readonly logger: Logger;
-  /** Conexão compartilhada com `tasks`/`jobs` (mesmo `db`, ARCHITECTURE.md §2) — usada só para a transação item+job da captura (ADR-018). */
+  /** Conexão compartilhada com `tasks`/`jobs` (mesmo `db`, ARCHITECTURE.md §2) — usada só para a transação item+job(s) da captura (ADR-018). */
   readonly db: Database;
-  /** Injetável para teste — data/hora do prompt da triagem e seleção de tom (TESTING.md §7). */
+  /** Injetável para teste — data/hora do prompt da triagem, seleção de tom e disparo de reminder (TESTING.md §7). */
   readonly now?: () => Date;
 }
 
@@ -96,7 +103,15 @@ export function buildCaptureModule(deps: CaptureModuleDeps): {
       }),
   });
 
-  const captureService = new CaptureService(deps.itemService, deps.jobRepository, deps.db);
+  const captureService = new CaptureService({
+    itemService: deps.itemService,
+    eventService: deps.eventService,
+    chainService: deps.chainService,
+    jobRepository: deps.jobRepository,
+    db: deps.db,
+    getDeslocamentoMinDefault: () =>
+      Number(deps.settings.get<number>(CHAINS_DESLOCAMENTO_MIN_DEFAULT_SETTING) ?? CHAINS_DESLOCAMENTO_MIN_DEFAULT_DEFAULT),
+  });
 
   const dispatch = buildCaptureDispatcher({
     triageService,
@@ -129,7 +144,11 @@ export function buildCaptureModule(deps: CaptureModuleDeps): {
   const manifest: ModuleManifest = {
     name: 'capture',
     jobs: {
-      reminder: buildReminderJobHandler({ outboxRepository: deps.outboxRepository, ownerJid: deps.ownerJid }),
+      reminder: buildReminderJobHandler({
+        outboxRepository: deps.outboxRepository,
+        ownerJid: deps.ownerJid,
+        ...(deps.now ? { now: deps.now } : {}),
+      }),
     },
     settingsDefaults: {
       [PENDING_RECOVERY_THRESHOLD_MS_SETTING]: PENDING_RECOVERY_THRESHOLD_MS_DEFAULT,
