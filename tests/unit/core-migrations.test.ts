@@ -156,6 +156,41 @@ describe('migrações base do core', () => {
     expect(indexes.map((i) => i.name)).toContain('jobs_due_lookup');
   });
 
+  it('migração 008 cria is_proactive em messages, default 0', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    db.prepare(`INSERT INTO messages (direction, jid) VALUES ('out', 'jid')`).run();
+    const row = db.prepare('SELECT is_proactive FROM messages').get() as { is_proactive: number };
+    expect(row.is_proactive).toBe(0);
+  });
+
+  it('is_proactive: aceita 1 explícito e rejeita valor fora de 0|1', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    expect(() =>
+      db.prepare(`INSERT INTO messages (direction, jid, is_proactive) VALUES ('out', 'jid', 1)`).run(),
+    ).not.toThrow();
+    expect(() =>
+      db.prepare(`INSERT INTO messages (direction, jid, is_proactive) VALUES ('out', 'jid', 2)`).run(),
+    ).toThrow();
+  });
+
+  it('down da migração 008 remove is_proactive sem derrubar a tabela', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    const migration = coreMigrations.find((m) => m.id === '008_core_messages_proactive');
+    expect(migration).toBeDefined();
+
+    rollbackMigration(db, migration!);
+
+    const columns = db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[];
+    expect(columns.map((c) => c.name)).not.toContain('is_proactive');
+    expect(tableNames(db)).toContain('messages');
+  });
+
   it('down da migração 007 remove o status cancelado, rebaixando jobs cancelados para failed (melhor mapeamento reversível)', () => {
     const db = new Database(':memory:');
     runMigrations(db, coreMigrations);

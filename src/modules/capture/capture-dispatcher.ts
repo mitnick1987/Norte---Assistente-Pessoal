@@ -49,7 +49,7 @@ export function buildCaptureDispatcher(
 ): (text: string, jid: string, messageId: number) => Promise<void> {
   const now = deps.now ?? (() => new Date());
 
-  const replyConversation = async (text: string, jid: string): Promise<void> => {
+  const replyConversation = async (text: string, jid: string, messageId: number): Promise<void> => {
     if (!deps.brainService) {
       deps.outboxRepository.enqueue({ jid, body: pickConversationFallback(now().getTime()), isProactive: false });
       return;
@@ -57,7 +57,7 @@ export function buildCaptureDispatcher(
 
     try {
       const history = deps.getRecentConversation?.(jid) ?? [];
-      const reply = await deps.brainService.reply(text, history);
+      const reply = await deps.brainService.reply(text, history, messageId);
       deps.outboxRepository.enqueue({ jid, body: reply, isProactive: false });
     } catch (err) {
       if (err instanceof LlmRequestError) {
@@ -73,12 +73,12 @@ export function buildCaptureDispatcher(
     const result = await deps.triageService.classify(text, jid);
 
     if (result.kind === 'error') {
-      await replyConversation(text, jid);
+      await replyConversation(text, jid, messageId);
       return;
     }
 
     if (result.output.classification !== 'captura' || result.output.items.length === 0) {
-      await replyConversation(text, jid);
+      await replyConversation(text, jid, messageId);
       return;
     }
 

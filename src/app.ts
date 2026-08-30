@@ -274,7 +274,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     alerter,
     logger,
     dailyProactiveCap: env.DAILY_PROACTIVE_CAP,
-    onDelivered: ({ jid, body }) => messageRepository.recordOutbound(jid, body),
+    onDelivered: ({ jid, body, isProactive }) => messageRepository.recordOutbound(jid, body, isProactive),
     ...(overrides.outboxSleep ? { sleep: overrides.outboxSleep } : {}),
     ...(overrides.outboxRandom ? { random: overrides.outboxRandom } : {}),
   });

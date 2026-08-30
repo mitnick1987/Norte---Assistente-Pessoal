@@ -41,7 +41,7 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
 
     const result = await runBrainLoop(
       { provider, tools: [buildEchoTool()], logger },
-      { model: 'm', systemPrompt: 'sys', messages: [{ role: 'user', content: 'oi' }], maxTokens: 100 },
+      { model: 'm', systemPrompt: 'sys', messages: [{ role: 'user', content: 'oi' }], maxTokens: 100, messageId: 1 },
     );
 
     expect(result.text).toBe('resposta final');
@@ -64,7 +64,7 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
 
     const result = await runBrainLoop(
       { provider, tools: [buildEchoTool(handler)], logger },
-      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100 },
+      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100, messageId: 1 },
     );
 
     expect(handler).not.toHaveBeenCalled();
@@ -87,7 +87,7 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
 
     const result = await runBrainLoop(
       { provider, tools: [buildEchoTool(handler)], logger },
-      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100 },
+      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100, messageId: 1 },
     );
 
     expect(handler).not.toHaveBeenCalled();
@@ -112,7 +112,7 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
 
     const result = await runBrainLoop(
       { provider, tools: [buildEchoTool(handler)], logger },
-      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100 },
+      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100, messageId: 1 },
     );
 
     expect(result.text).toBe('falhou');
@@ -142,7 +142,7 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
 
     await runBrainLoop(
       { provider, tools: [buildEchoTool(handler)], logger: spyLogger },
-      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100 },
+      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100, messageId: 1 },
     );
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
@@ -168,7 +168,7 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
 
     const result = await runBrainLoop(
       { provider, tools: [buildEchoTool(handler)], logger },
-      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100 },
+      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100, messageId: 1 },
     );
 
     expect(handler).toHaveBeenCalledTimes(2);
@@ -188,7 +188,7 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
 
     const result = await runBrainLoop(
       { provider, tools: [buildEchoTool()], logger },
-      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100 },
+      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100, messageId: 1 },
     );
 
     expect(result.text).toContain('não consegui');
@@ -209,6 +209,7 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
       systemPrompt: 'sys',
       messages: [],
       maxTokens: 100,
+      messageId: 1,
     });
 
     expect(onUsage).toHaveBeenCalledTimes(2);
@@ -218,7 +219,10 @@ describe('runBrainLoop (ADR-001, loop de tool-use manual)', () => {
     const complete = vi.fn<LlmProvider['complete']>(async () => textResult('oi'));
     const provider = buildProvider(complete);
 
-    await runBrainLoop({ provider, tools: [], logger }, { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100 });
+    await runBrainLoop(
+      { provider, tools: [], logger },
+      { model: 'm', systemPrompt: 'sys', messages: [], maxTokens: 100, messageId: 1 },
+    );
 
     expect(complete.mock.calls[0]![0].cacheSystemPrompt).toBe(true);
   });

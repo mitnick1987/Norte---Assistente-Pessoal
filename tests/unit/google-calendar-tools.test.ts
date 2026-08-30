@@ -7,12 +7,14 @@ import {
 import type { GoogleCalendarService } from '../../src/modules/integrations/google-calendar/google-calendar-service.js';
 import { AuthTokenNotFoundError } from '../../src/modules/integrations/google-calendar/domain/index.js';
 
+const TEST_CTX = { messageId: 42 };
+
 function buildServiceStub(createEventFromBrain: ReturnType<typeof vi.fn>): GoogleCalendarService {
   return { createEventFromBrain } as unknown as GoogleCalendarService;
 }
 
 describe('tool create_event (ADR-019, FEAT-006)', () => {
-  it('input válido (ISO absoluto) delega ao serviço com startAt/endAt convertidos', async () => {
+  it('input válido (ISO absoluto) delega ao serviço com startAt/endAt convertidos e sourceMessageId do turno', async () => {
     const createEventFromBrain = vi.fn().mockResolvedValue({ itemId: 1, eventId: 2, gcalId: 'gcal-1' });
     const [tool] = buildGoogleCalendarTools(buildServiceStub(createEventFromBrain));
 
@@ -21,13 +23,14 @@ describe('tool create_event (ADR-019, FEAT-006)', () => {
       startAt: '2026-09-04T13:00:00.000Z',
       endAt: '2026-09-04T14:00:00.000Z',
     });
-    const result = await tool!.handler(parsed);
+    const result = await tool!.handler(parsed, TEST_CTX);
 
     expect(result).toEqual({ itemId: 1, eventId: 2, gcalId: 'gcal-1' });
     expect(createEventFromBrain).toHaveBeenCalledWith({
       title: 'Reunião',
       startAt: new Date('2026-09-04T13:00:00.000Z'),
       endAt: new Date('2026-09-04T14:00:00.000Z'),
+      sourceMessageId: 42,
     });
   });
 
@@ -36,7 +39,7 @@ describe('tool create_event (ADR-019, FEAT-006)', () => {
     const [tool] = buildGoogleCalendarTools(buildServiceStub(createEventFromBrain));
 
     const parsed = tool!.inputSchema.parse({ title: 'Call', startAt: '2026-09-04T13:00:00.000Z' });
-    await tool!.handler(parsed);
+    await tool!.handler(parsed, TEST_CTX);
 
     expect(createEventFromBrain).toHaveBeenCalledWith(
       expect.objectContaining({ endAt: new Date('2026-09-04T14:00:00.000Z') }),
@@ -66,8 +69,8 @@ describe('tool create_event (ADR-019, FEAT-006)', () => {
     const [tool] = buildGoogleCalendarTools(buildServiceStub(createEventFromBrain));
     const parsed = tool!.inputSchema.parse({ title: 'x', startAt: '2026-09-04T13:00:00.000Z' });
 
-    await expect(tool!.handler(parsed)).rejects.toThrow(CreateEventToolError);
-    await expect(tool!.handler(parsed)).rejects.not.toThrow(/in_past/);
+    await expect(tool!.handler(parsed, TEST_CTX)).rejects.toThrow(CreateEventToolError);
+    await expect(tool!.handler(parsed, TEST_CTX)).rejects.not.toThrow(/in_past/);
   });
 
   it('AuthTokenNotFoundError e GoogleTokenRefreshError viram o mesmo erro genérico de acesso', async () => {
@@ -76,7 +79,7 @@ describe('tool create_event (ADR-019, FEAT-006)', () => {
     );
     const parsed = tool!.inputSchema.parse({ title: 'x', startAt: '2026-09-04T13:00:00.000Z' });
 
-    await expect(tool!.handler(parsed)).rejects.toThrow(CreateEventToolError);
+    await expect(tool!.handler(parsed, TEST_CTX)).rejects.toThrow(CreateEventToolError);
   });
 
   it('falha de rede/erro desconhecido também vira CreateEventToolError, nunca propaga cru', async () => {
@@ -85,8 +88,8 @@ describe('tool create_event (ADR-019, FEAT-006)', () => {
     );
     const parsed = tool!.inputSchema.parse({ title: 'x', startAt: '2026-09-04T13:00:00.000Z' });
 
-    await expect(tool!.handler(parsed)).rejects.toThrow(CreateEventToolError);
-    await expect(tool!.handler(parsed)).rejects.not.toThrow(/ECONNRESET/);
+    await expect(tool!.handler(parsed, TEST_CTX)).rejects.toThrow(CreateEventToolError);
+    await expect(tool!.handler(parsed, TEST_CTX)).rejects.not.toThrow(/ECONNRESET/);
   });
 
   it('erro de GoogleTokenRefreshError também vira erro de acesso genérico', async () => {
@@ -95,6 +98,6 @@ describe('tool create_event (ADR-019, FEAT-006)', () => {
     );
     const parsed = tool!.inputSchema.parse({ title: 'x', startAt: '2026-09-04T13:00:00.000Z' });
 
-    await expect(tool!.handler(parsed)).rejects.toThrow(CreateEventToolError);
+    await expect(tool!.handler(parsed, TEST_CTX)).rejects.toThrow(CreateEventToolError);
   });
 });

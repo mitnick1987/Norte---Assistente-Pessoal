@@ -75,7 +75,7 @@ function buildContext(oauthOverrides: Partial<GoogleOAuthPort> = {}) {
   };
   const tokensRepository = new AuthTokensRepository(db);
   const cipher = new TokenCipher(randomBytes(32).toString('base64'));
-  const alerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+  const alerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn(), alertAnchorRitualCapped: vi.fn() };
 
   const googleCalendarService = new GoogleCalendarService({
     db,

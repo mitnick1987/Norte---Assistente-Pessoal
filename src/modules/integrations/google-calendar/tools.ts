@@ -53,7 +53,7 @@ export function buildGoogleCalendarTools(service: GoogleCalendarService): ToolDe
     description:
       'Cria um compromisso no Google Calendar e no task-store a partir de um horário já resolvido em ISO absoluto (nunca calcule datas relativas você mesmo).',
     inputSchema: createEventInputSchema,
-    async handler(input): Promise<CreateEventToolOutput> {
+    async handler(input, ctx): Promise<CreateEventToolOutput> {
       const startAt = new Date(input.startAt);
       const endAt = input.endAt ? new Date(input.endAt) : new Date(startAt.getTime() + DEFAULT_EVENT_DURATION_MS);
 
@@ -62,6 +62,7 @@ export function buildGoogleCalendarTools(service: GoogleCalendarService): ToolDe
           title: input.title,
           startAt,
           endAt,
+          sourceMessageId: ctx.messageId,
           ...(input.local !== undefined ? { local: input.local } : {}),
         });
         return created;

@@ -18,11 +18,13 @@ export interface OutboxProcessorDeps {
   readonly dailyProactiveCap: number;
   /**
    * Callback pós-confirmação — hoje usado para registrar a mensagem de
-   * saída em `messages` (auditoria/custo, RF-15). Callback em vez de
-   * injetar MessageRepository direto: outbox não deveria depender de
-   * channel/ (evita acoplamento circular entre subpastas do core).
+   * saída em `messages` (auditoria/custo, RF-15; `isProactive` também
+   * espelhado lá para a janela de conversa do brain excluir proativas,
+   * FEAT-006 item 4). Callback em vez de injetar MessageRepository direto:
+   * outbox não deveria depender de channel/ (evita acoplamento circular
+   * entre subpastas do core).
    */
-  onDelivered?: (message: { jid: string; body: string }) => void;
+  onDelivered?: (message: { jid: string; body: string; isProactive: boolean }) => void;
   /** Injetáveis para teste — nunca setTimeout/Math.random reais no domínio (TESTING.md §7). */
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
@@ -78,7 +80,22 @@ export class OutboxProcessor {
       const sinceIso = zonedTimeToUtc(startOfZonedDay(this.now())).toISOString();
       const sentToday = this.deps.repository.countProactiveSentSince(sinceIso);
       if (proactiveCapReached(sentToday, this.deps.dailyProactiveCap)) {
-        this.deps.logger.warn({ messageId: message.id }, 'teto diário de proativas atingido, mensagem represada');
+        // Teto continua limite duro para todo mundo (RF-24) — inclusive
+        // ritual-âncora, que só ganhou prioridade de fila (`findPending`,
+        // ORDER BY is_anchor_ritual DESC) para chegar aqui por último, não
+        // isenção. Se AINDA ASSIM um ritual-âncora for represado, é a
+        // garantia de "nunca deixa de chegar" (PRD §7) sendo quebrada —
+        // situação grave demais para só um log warn (FEAT-006, achado de
+        // review).
+        if (message.is_anchor_ritual) {
+          this.deps.logger.warn(
+            { messageId: message.id },
+            'ritual-âncora (briefing/revisão) represado pelo teto diário de proativas',
+          );
+          await this.deps.alerter.alertAnchorRitualCapped({ id: message.id, jid: message.jid });
+        } else {
+          this.deps.logger.warn({ messageId: message.id }, 'teto diário de proativas atingido, mensagem represada');
+        }
         return;
       }
     }
@@ -97,7 +114,7 @@ export class OutboxProcessor {
       await this.deps.sender.sendText(message.jid, message.body);
 
       this.deps.repository.markDelivered(message.id, this.now());
-      this.deps.onDelivered?.({ jid: message.jid, body: message.body });
+      this.deps.onDelivered?.({ jid: message.jid, body: message.body, isProactive: Boolean(message.is_proactive) });
     } catch (err) {
       await this.handleSendFailure(message, err);
     }

@@ -6,6 +6,7 @@ export interface OutboxMessageRow {
   jid: string;
   body: string;
   is_proactive: number;
+  is_anchor_ritual: number;
   status: string;
   attempts: number;
   delivered_at: string | null;
@@ -17,6 +18,16 @@ export interface EnqueueInput {
   body: string;
   jobId?: number;
   isProactive?: boolean;
+  /**
+   * Marca a mensagem como ritual-âncora (briefing, revisão — RF-05/RF-06)
+   * para fins só de ORDENAÇÃO dentro do teto diário, que continua limite
+   * duro (RF-24: "teto diário permanece como limite duro em settings") — não
+   * isenta, nem pula a checagem de `proactiveCapReached`. Rituais-âncora só
+   * ganham prioridade de fila (`findPending`) para serem os ÚLTIMOS a esbarrar
+   * no teto num mesmo tick, nunca os primeiros represados atrás de uma
+   * cobrança/lembrete comum.
+   */
+  isAnchorRitual?: boolean;
 }
 
 /** Única porta de leitura/escrita da fila de saída — nenhum módulo insere direto na tabela. */
@@ -26,19 +37,28 @@ export class OutboxRepository {
   enqueue(input: EnqueueInput): number {
     const result = this.db
       .prepare(
-        `INSERT INTO outbox_messages (job_id, jid, body, is_proactive, status, attempts)
-         VALUES (?, ?, ?, ?, 'pending', 0)`,
+        `INSERT INTO outbox_messages (job_id, jid, body, is_proactive, is_anchor_ritual, status, attempts)
+         VALUES (?, ?, ?, ?, ?, 'pending', 0)`,
       )
-      .run(input.jobId ?? null, input.jid, input.body, input.isProactive ? 1 : 0);
+      .run(input.jobId ?? null, input.jid, input.body, input.isProactive ? 1 : 0, input.isAnchorRitual ? 1 : 0);
     return Number(result.lastInsertRowid);
   }
 
-  /** Exclui mensagens em backoff (`retry_after` no futuro) — o tick não reprocessa antes da hora. */
+  /**
+   * Exclui mensagens em backoff (`retry_after` no futuro) — o tick não
+   * reprocessa antes da hora. Ritual-âncora (briefing/revisão) vem primeiro
+   * na fila: o teto diário continua limite duro (RF-24) — nenhuma mensagem
+   * pula a checagem —, mas processar rituais-âncora antes de lembretes/
+   * cobranças comuns no mesmo tick garante que, se o teto for atingido
+   * durante o processamento, é uma proativa comum que fica represada, nunca
+   * o briefing/revisão (PRD §7: "briefing e revisão nunca deixam de chegar").
+   */
   findPending(nowIso: string): OutboxMessageRow[] {
     return this.db
       .prepare<[string], OutboxMessageRow>(
         `SELECT * FROM outbox_messages
-         WHERE status = 'pending' AND (retry_after IS NULL OR retry_after <= ?)`,
+         WHERE status = 'pending' AND (retry_after IS NULL OR retry_after <= ?)
+         ORDER BY is_anchor_ritual DESC, id ASC`,
       )
       .all(nowIso);
   }

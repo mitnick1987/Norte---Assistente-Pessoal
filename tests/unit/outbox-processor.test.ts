@@ -12,10 +12,20 @@ function buildRow(overrides: Partial<OutboxMessageRow>): OutboxMessageRow {
     jid: '5511999999999@s.whatsapp.net',
     body: 'pong',
     is_proactive: 0,
+    is_anchor_ritual: 0,
     status: 'pending',
     attempts: 0,
     delivered_at: null,
     retry_after: null,
+    ...overrides,
+  };
+}
+
+function buildAlerter(overrides: Partial<FailureAlerter> = {}): FailureAlerter {
+  return {
+    alertDeliveryExhausted: vi.fn(),
+    alertRefreshFailure: vi.fn(),
+    alertAnchorRitualCapped: vi.fn(),
     ...overrides,
   };
 }
@@ -39,7 +49,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn() };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
 
     const processor = new OutboxProcessor({
       repository,
@@ -67,7 +77,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn() };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
     const onDelivered = vi.fn();
 
     const processor = new OutboxProcessor({
@@ -82,7 +92,39 @@ describe('OutboxProcessor', () => {
 
     await processor.processPending();
 
-    expect(onDelivered).toHaveBeenCalledWith({ jid: row.jid, body: row.body });
+    expect(onDelivered).toHaveBeenCalledWith({ jid: row.jid, body: row.body, isProactive: false });
+  });
+
+  it('onDelivered recebe isProactive=true para mensagem de job (briefing/revisão/lembrete)', async () => {
+    const row = buildRow({ id: 7, is_proactive: 1 });
+    const repository = {
+      findPending: vi.fn().mockReturnValue([row]),
+      claimForSending: vi.fn().mockReturnValue(true),
+      markDelivered: vi.fn(),
+      countProactiveSentSince: vi.fn().mockReturnValue(0),
+    } as unknown as OutboxRepository;
+
+    const sender: MessageSender = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendPresence: vi.fn().mockResolvedValue(undefined),
+    };
+    const alerter: FailureAlerter = buildAlerter();
+    const onDelivered = vi.fn();
+
+    const processor = new OutboxProcessor({
+      repository,
+      sender,
+      alerter,
+      logger: silentLogger(),
+      dailyProactiveCap: 6,
+      onDelivered,
+      sleep: noSleep(),
+      random: () => 0,
+    });
+
+    await processor.processPending();
+
+    expect(onDelivered).toHaveBeenCalledWith({ jid: row.jid, body: row.body, isProactive: true });
   });
 
   it('nunca marca delivered_at quando o envio falha', async () => {
@@ -101,7 +143,7 @@ describe('OutboxProcessor', () => {
       sendText: vi.fn().mockRejectedValue(new Error('Evolution respondeu 500')),
       sendPresence: vi.fn(),
     };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
 
     const processor = new OutboxProcessor({
       repository,
@@ -132,7 +174,7 @@ describe('OutboxProcessor', () => {
       sendText: vi.fn().mockRejectedValue(new Error('timeout')),
       sendPresence: vi.fn(),
     };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn().mockResolvedValue(undefined), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter({ alertDeliveryExhausted: vi.fn().mockResolvedValue(undefined) });
 
     const processor = new OutboxProcessor({
       repository,
@@ -159,7 +201,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn().mockResolvedValue(undefined) };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
     const sleep = vi.fn().mockResolvedValue(undefined);
 
     const processor = new OutboxProcessor({
@@ -187,7 +229,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn(), sendPresence: vi.fn() };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
 
     const processor = new OutboxProcessor({
       repository,
@@ -204,6 +246,60 @@ describe('OutboxProcessor', () => {
     expect(repository.claimForSending).not.toHaveBeenCalled();
   });
 
+  it('teto continua limite duro para ritual-âncora (não isenta), mas dispara alerta explícito em vez de só logar (achado de review FEAT-006)', async () => {
+    const briefing = buildRow({ id: 10, is_proactive: 1, is_anchor_ritual: 1 });
+    const repository = {
+      findPending: vi.fn().mockReturnValue([briefing]),
+      claimForSending: vi.fn().mockReturnValue(true),
+      countProactiveSentSince: vi.fn().mockReturnValue(6),
+    } as unknown as OutboxRepository;
+
+    const sender: MessageSender = { sendText: vi.fn(), sendPresence: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
+
+    const processor = new OutboxProcessor({
+      repository,
+      sender,
+      alerter,
+      logger: silentLogger(),
+      dailyProactiveCap: 6,
+      sleep: noSleep(),
+    });
+
+    await processor.processPending();
+
+    // teto ainda barra o envio — ritual-âncora não pula a checagem.
+    expect(sender.sendText).not.toHaveBeenCalled();
+    expect(repository.claimForSending).not.toHaveBeenCalled();
+    // mas a supressão nunca é silenciosa: alerta dedicado dispara.
+    expect(alerter.alertAnchorRitualCapped).toHaveBeenCalledWith({ id: 10, jid: briefing.jid });
+  });
+
+  it('proativa comum represada pelo teto não dispara o alerta de ritual-âncora', async () => {
+    const proactive = buildRow({ id: 11, is_proactive: 1, is_anchor_ritual: 0 });
+    const repository = {
+      findPending: vi.fn().mockReturnValue([proactive]),
+      claimForSending: vi.fn().mockReturnValue(true),
+      countProactiveSentSince: vi.fn().mockReturnValue(6),
+    } as unknown as OutboxRepository;
+
+    const sender: MessageSender = { sendText: vi.fn(), sendPresence: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
+
+    const processor = new OutboxProcessor({
+      repository,
+      sender,
+      alerter,
+      logger: silentLogger(),
+      dailyProactiveCap: 6,
+      sleep: noSleep(),
+    });
+
+    await processor.processPending();
+
+    expect(alerter.alertAnchorRitualCapped).not.toHaveBeenCalled();
+  });
+
   it('conta o teto diário a partir da meia-noite de America/Sao_Paulo, não de uma janela rolante de 24h', async () => {
     const proactive = buildRow({ id: 7, is_proactive: 1 });
     const repository = {
@@ -214,7 +310,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn().mockResolvedValue(undefined) };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
 
     // 00:30 em São Paulo (UTC-03:00) em 26/08 == 03:30 UTC do mesmo dia.
     const processor = new OutboxProcessor({
@@ -257,7 +353,7 @@ describe('OutboxProcessor', () => {
       }),
       sendPresence: vi.fn(),
     };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
 
     const processor = new OutboxProcessor({
       repository,
@@ -288,7 +384,7 @@ describe('OutboxProcessor', () => {
     } as unknown as OutboxRepository;
 
     const sender: MessageSender = { sendText: vi.fn().mockResolvedValue(undefined), sendPresence: vi.fn() };
-    const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+    const alerter: FailureAlerter = buildAlerter();
 
     const processor = new OutboxProcessor({
       repository,

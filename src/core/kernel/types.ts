@@ -14,6 +14,17 @@ export interface Migration {
 }
 
 /**
+ * Contexto do turno de conversa em que a tool foi chamada — hoje só
+ * `messageId` (FEAT-006 item 2), o vínculo que `create_event` grava como
+ * `sourceMessageId` do item para a varredura de recuperação do boot
+ * (ADR-018) não duplicar o evento remoto num reprocessamento. Handler que
+ * não precisa dele simplesmente ignora o segundo parâmetro.
+ */
+export interface ToolCallContext {
+  readonly messageId: number;
+}
+
+/**
  * Declaração de tool servida em dois transportes (tool use do brain e,
  * no M2, o servidor MCP — ADR-014): o schema zod é a única porta de
  * validação, então o mesmo objeto atende os dois sem lógica própria.
@@ -22,7 +33,7 @@ export interface ToolDefinition<TInput = unknown> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodType<TInput>;
-  handler: (input: TInput) => Promise<unknown>;
+  handler: (input: TInput, ctx: ToolCallContext) => Promise<unknown>;
 }
 
 export interface CommandMatchContext {

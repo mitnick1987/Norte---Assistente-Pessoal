@@ -52,7 +52,7 @@ export class BrainService {
     this.now = deps.now ?? (() => new Date());
   }
 
-  async reply(userText: string, history: readonly RecentMessage[]): Promise<string> {
+  async reply(userText: string, history: readonly RecentMessage[], messageId: number): Promise<string> {
     const systemPrompt = buildBrainSystemPrompt(this.deps.getActiveModules());
     const currentDateTime = formatCurrentDateTimeForPrompt(toZonedParts(this.now()));
 
@@ -77,6 +77,7 @@ export class BrainService {
         systemPrompt,
         messages: [...historyMessages, currentMessage],
         maxTokens: BRAIN_MAX_TOKENS,
+        messageId,
       },
     );
 

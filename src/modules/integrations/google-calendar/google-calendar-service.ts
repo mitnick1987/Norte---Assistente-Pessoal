@@ -58,6 +58,13 @@ export interface CreateEventFromBrainParams {
   readonly startAt: Date;
   readonly endAt: Date;
   readonly local?: string;
+  /**
+   * Mensagem de conversa que originou a chamada (FEAT-006 item 2, ADR-018) —
+   * chave de idempotência: reprocessar a mesma mensagem (retry do loop de
+   * tool-use, varredura de recuperação do boot) encontra o item já gravado e
+   * não duplica o evento remoto no Google.
+   */
+  readonly sourceMessageId: number;
 }
 
 export interface BrainEventCreated {
@@ -253,6 +260,14 @@ export class GoogleCalendarService {
    * chamar o Google (o backend não confia cegamente no `startAt` que o
    * modelo formulou a partir da data injetada no prompt).
    *
+   * Idempotência por `sourceMessageId` (achado de review pós-merge, ADR-018):
+   * a captura direta dedupe por `source_message_id`/`source_item_index` antes
+   * de chamar qualquer serviço externo, mas o brain não tinha o equivalente —
+   * um crash entre `insertEvent` e a confirmação da mensagem de conversa como
+   * processada fazia a varredura de recuperação do boot reprocessar a mesma
+   * mensagem e criar um SEGUNDO evento real no Google. Checar aqui, antes de
+   * qualquer chamada de rede, é a mesma garantia que a captura já tinha.
+   *
    * A chamada ao Google é I/O de rede e não pode entrar no
    * `db.transaction()` síncrono do better-sqlite3 — por isso acontece antes;
    * uma falha aqui propaga sem tocar o task-store (nunca cria item órfão sem
@@ -261,12 +276,20 @@ export class GoogleCalendarService {
    * sem o outro).
    */
   async createEventFromBrain(params: CreateEventFromBrainParams): Promise<BrainEventCreated> {
+    const existing = this.findExistingBrainEvent(params.sourceMessageId);
+    if (existing) return existing;
+
     const validation = validateEventDates(params.startAt, params.endAt, this.now());
     if (!validation.valid) {
       throw new InvalidEventDateError(validation.reason);
     }
 
-    const remote = await this.createRemoteEvent(params);
+    const remote = await this.createRemoteEvent({
+      title: params.title,
+      startAt: params.startAt,
+      endAt: params.endAt,
+      ...(params.local !== undefined ? { local: params.local } : {}),
+    });
 
     const run = this.deps.db.transaction(() => {
       const item = this.deps.itemService.create({
@@ -275,6 +298,7 @@ export class GoogleCalendarService {
         origin: 'texto',
         status: 'ativa',
         dueAt: params.startAt,
+        sourceMessageId: params.sourceMessageId,
       });
 
       const event = this.deps.eventService.create({
@@ -294,6 +318,24 @@ export class GoogleCalendarService {
 
     const { itemId, eventId } = run();
     return { itemId, eventId, gcalId: remote.gcalId };
+  }
+
+  /**
+   * Item já gravado para essa mensagem de conversa (idempotência, ver
+   * `createEventFromBrain`) sem evento ativo associado é um estado que não
+   * deveria existir (item+event nascem na mesma transação) — mas se
+   * acontecer (dado legado, migração futura), tratamos como "sem registro
+   * anterior" e deixamos o fluxo normal recriar o evento, em vez de propagar
+   * um erro que travaria o brain para sempre nessa mensagem.
+   */
+  private findExistingBrainEvent(sourceMessageId: number): BrainEventCreated | undefined {
+    const item = this.deps.itemService.findBySourceMessageId(sourceMessageId);
+    if (!item) return undefined;
+
+    const event = this.deps.eventService.findActiveByItemId(item.id);
+    if (!event || !event.gcalId) return undefined;
+
+    return { itemId: item.id, eventId: event.id, gcalId: event.gcalId };
   }
 
   /**

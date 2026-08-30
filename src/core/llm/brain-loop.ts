@@ -20,7 +20,12 @@ export interface BrainToolDefinition<TInput = unknown> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodType<TInput>;
-  handler: (input: TInput) => Promise<unknown>;
+  handler: (input: TInput, ctx: BrainToolCallContext) => Promise<unknown>;
+}
+
+/** Espelha `ToolCallContext` do kernel (mesmo motivo de não importar o tipo: evitar ciclo). */
+export interface BrainToolCallContext {
+  readonly messageId: number;
 }
 
 export interface BrainLoopDeps {
@@ -35,6 +40,8 @@ export interface BrainLoopRequest {
   readonly systemPrompt: string;
   readonly messages: readonly LlmMessage[];
   readonly maxTokens: number;
+  /** Mensagem de entrada que originou este turno (FEAT-006 item 2) — repassada às tools via `ToolCallContext`. */
+  readonly messageId: number;
 }
 
 export interface BrainLoopResult {
@@ -115,7 +122,7 @@ export async function runBrainLoop(deps: BrainLoopDeps, request: BrainLoopReques
 
     const toolResultBlocks: LlmContentBlock[] = [];
     for (const call of result.toolCalls) {
-      toolResultBlocks.push(await resolveToolCall(toolsByName, call, deps.logger));
+      toolResultBlocks.push(await resolveToolCall(toolsByName, call, deps.logger, { messageId: request.messageId }));
     }
 
     messages = [
@@ -133,6 +140,7 @@ async function resolveToolCall(
   toolsByName: ReadonlyMap<string, BrainToolDefinition>,
   call: { readonly id: string; readonly toolName: string; readonly input: unknown },
   logger: Logger,
+  ctx: BrainToolCallContext,
 ): Promise<LlmContentBlock> {
   const tool = toolsByName.get(call.toolName);
   if (!tool) {
@@ -147,7 +155,7 @@ async function resolveToolCall(
   }
 
   try {
-    const output = await tool.handler(parsed.data);
+    const output = await tool.handler(parsed.data, ctx);
     return { type: 'tool_result', toolUseId: call.id, content: JSON.stringify(output ?? null) };
   } catch (err) {
     if (err instanceof LlmRequestError) throw err;
