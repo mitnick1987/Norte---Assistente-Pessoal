@@ -56,4 +56,40 @@ export function pickConversationFallback(seed: number): string {
   return pick(CONVERSATION_FALLBACK_VARIATIONS, seed);
 }
 
-export { SINGLE_ITEM_VARIATIONS, MULTI_ITEM_VARIATIONS, CONVERSATION_FALLBACK_VARIATIONS };
+/**
+ * Falha total de STT (spec FEAT-003, item 3): primário e fallback ambos
+ * falharam, ou áudio com ruído/sem fala reconhecível. Pede, não culpa —
+ * nunca "o áudio falhou" (soaria como defeito do usuário) nem menção a erro
+ * técnico (a causa real é irrelevante para quem só quer ser entendido).
+ */
+const STT_TOTAL_FAILURE_VARIATIONS = [
+  'Não consegui ouvir esse áudio agora, me manda em texto?',
+  'Esse áudio não chegou claro pra mim — pode mandar em texto?',
+  'Não peguei o que você disse nesse áudio, tenta em texto?',
+] as const;
+
+export function pickSttFailureMessage(seed: number): string {
+  return pick(STT_TOTAL_FAILURE_VARIATIONS, seed);
+}
+
+/**
+ * Áudio acima do limite de duração/tamanho (spec item 5): educado,
+ * informa o limite, sem tom de repreensão — nunca soa como o usuário fez
+ * algo errado ao mandar um áudio longo.
+ */
+const AUDIO_TOO_LONG_VARIATIONS = [
+  'Esse áudio passou do limite que eu consigo processar — manda um pedaço menor ou em texto?',
+  'Esse áudio é maior do que eu consigo ouvir agora — pode mandar mais curto ou em texto?',
+] as const;
+
+export function pickAudioTooLongMessage(seed: number): string {
+  return pick(AUDIO_TOO_LONG_VARIATIONS, seed);
+}
+
+export {
+  SINGLE_ITEM_VARIATIONS,
+  MULTI_ITEM_VARIATIONS,
+  CONVERSATION_FALLBACK_VARIATIONS,
+  STT_TOTAL_FAILURE_VARIATIONS,
+  AUDIO_TOO_LONG_VARIATIONS,
+};

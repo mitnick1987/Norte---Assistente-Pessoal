@@ -84,4 +84,45 @@ describe('migrações base do core', () => {
     expect(columns.map((c) => c.name)).not.toContain('processing_status');
     expect(tableNames(db)).toContain('messages');
   });
+
+  it('migração 006 (FEAT-003) cria media_type, transcricao e message_key_json em messages', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    const columns = db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[];
+    expect(columns.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['media_type', 'transcricao', 'message_key_json']),
+    );
+  });
+
+  it('media_type: CHECK constraint aceita NULL e "audio", rejeita outro valor', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    expect(() =>
+      db.prepare(`INSERT INTO messages (direction, jid, media_type) VALUES ('in', 'jid', 'audio')`).run(),
+    ).not.toThrow();
+    expect(() =>
+      db.prepare(`INSERT INTO messages (direction, jid, media_type) VALUES ('in', 'jid', NULL)`).run(),
+    ).not.toThrow();
+    expect(() =>
+      db.prepare(`INSERT INTO messages (direction, jid, media_type) VALUES ('in', 'jid', 'imagem')`).run(),
+    ).toThrow();
+  });
+
+  it('down da migração 006 remove as três colunas sem derrubar a tabela', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, coreMigrations);
+
+    const migration = coreMigrations.find((m) => m.id === '006_core_messages_media');
+    expect(migration).toBeDefined();
+
+    rollbackMigration(db, migration!);
+
+    const columns = db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[];
+    expect(columns.map((c) => c.name)).not.toEqual(
+      expect.arrayContaining(['media_type', 'transcricao', 'message_key_json']),
+    );
+    expect(tableNames(db)).toContain('messages');
+  });
 });

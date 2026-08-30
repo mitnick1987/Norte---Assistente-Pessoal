@@ -24,6 +24,7 @@ import {
 import { registerHealthRoute } from './core/health/index.js';
 import { EmailAlerter } from './infra-ops/index.js';
 import { AnthropicApiKeyProvider } from './core/llm/index.js';
+import { GroqSttProvider, OpenAiWhisperProvider, SttRouter } from './core/stt/index.js';
 import { buildTasksModule } from './modules/tasks/public/index.js';
 import {
   buildCaptureModule,
@@ -92,15 +93,39 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   const jobRepository = new JobRepository(db);
   const outboxRepository = new OutboxRepository(db);
   const messageRepository = new MessageRepository(db);
+  const settings = new SettingsStore(db);
 
   const llmProvider = new AnthropicApiKeyProvider({ apiKey: env.ANTHROPIC_API_KEY });
 
-  const { manifest: captureManifest, dispatch: dispatchCapture } = buildCaptureModule({
+  // core/stt (ADR-017, mesmo desenho de core/llm): GROQ_API_KEY ausente
+  // desativa o primário (o router nem tenta chamá-lo); OPENAI_API_KEY
+  // ausente só desativa o fallback — nenhuma das duas é erro de boot.
+  const sttRouter = new SttRouter({
+    primary: env.GROQ_API_KEY ? new GroqSttProvider({ apiKey: env.GROQ_API_KEY }) : undefined,
+    fallback: env.OPENAI_API_KEY ? new OpenAiWhisperProvider({ apiKey: env.OPENAI_API_KEY }) : undefined,
+    logger,
+  });
+
+  const evolutionClient = new EvolutionClient({
+    baseUrl: env.EVOLUTION_API_URL,
+    apiKey: env.EVOLUTION_API_KEY,
+    instance: env.EVOLUTION_INSTANCE,
+  });
+
+  const {
+    manifest: captureManifest,
+    dispatch: dispatchCapture,
+    dispatchAudio,
+    recoverAudio,
+  } = buildCaptureModule({
     llmProvider,
+    sttRouter,
+    mediaFetcher: evolutionClient,
     itemService,
     jobRepository,
     outboxRepository,
     messageRepository,
+    settings,
     ownerJid: env.OWNER_WHATSAPP_JID,
     logger,
     db,
@@ -116,7 +141,6 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   const eventBus = new EventBus<Record<string, unknown>>();
   registry.wireEvents(eventBus);
 
-  const settings = new SettingsStore(db);
   settings.seedDefaults(registry.getSettingsDefaults());
 
   const scheduler = new Scheduler({
@@ -126,12 +150,6 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   });
 
   const connectionWatchdog = new ConnectionWatchdog();
-
-  const evolutionClient = new EvolutionClient({
-    baseUrl: env.EVOLUTION_API_URL,
-    apiKey: env.EVOLUTION_API_KEY,
-    instance: env.EVOLUTION_INSTANCE,
-  });
 
   const alerter = new EmailAlerter({ smtpUrl: env.SMTP_URL, alertEmail: env.ALERT_EMAIL }, logger);
 
@@ -162,6 +180,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     connectionWatchdog,
     logger,
     onUnmatchedText: dispatchCapture,
+    onAudioMessage: dispatchAudio,
   });
 
   registerHealthRoute(fastify, {
@@ -197,6 +216,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
           commands: registry.getCommands(),
           outboxRepository,
           onUnmatchedText: dispatchCapture,
+          onAudioRecovery: recoverAudio,
           logger,
         },
         Number(thresholdMs),

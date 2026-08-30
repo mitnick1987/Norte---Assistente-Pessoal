@@ -25,6 +25,8 @@ const REDACTED_PATHS = [
   'EVOLUTION_WEBHOOK_SECRET',
   'TOKEN_ENCRYPTION_KEY',
   'ANTHROPIC_API_KEY',
+  'GROQ_API_KEY',
+  'OPENAI_API_KEY',
   'refreshToken',
   '*.refreshToken',
   'refresh_token',

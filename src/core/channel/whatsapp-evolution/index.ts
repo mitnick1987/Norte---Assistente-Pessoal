@@ -1,11 +1,11 @@
-export { EvolutionClient } from './evolution-client.js';
+export { EvolutionClient, MediaUnavailableError } from './evolution-client.js';
 export type { EvolutionClientConfig } from './evolution-client.js';
 export { ConnectionWatchdog } from './connection-watchdog.js';
 export type { ConnectionState } from './connection-watchdog.js';
 export { registerEvolutionWebhookRoute, processInboundText } from './webhook-route.js';
-export type { WebhookRouteDeps, ProcessInboundDeps, UnmatchedTextHandler } from './webhook-route.js';
+export type { WebhookRouteDeps, ProcessInboundDeps, UnmatchedTextHandler, AudioMessageHandler } from './webhook-route.js';
 export { recoverPendingMessages } from './pending-recovery.js';
-export type { RecoverPendingMessagesDeps } from './pending-recovery.js';
+export type { RecoverPendingMessagesDeps, AudioRecoveryHandler } from './pending-recovery.js';
 export { evolutionWebhookSchema } from './webhook-schema.js';
 export type { EvolutionWebhookPayload, MessagesUpsertEvent, ConnectionUpdateEvent } from './webhook-schema.js';
 export { normalizeIncomingMessage, isEchoOfOwnMessage } from './normalize.js';

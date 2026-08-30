@@ -6,6 +6,7 @@ import { coreMigrations } from '../../src/core/db/migrations/index.js';
 import { MessageRepository } from '../../src/core/channel/message-repository.js';
 import { OutboxRepository } from '../../src/core/outbox/index.js';
 import { ConnectionWatchdog, registerEvolutionWebhookRoute } from '../../src/core/channel/whatsapp-evolution/index.js';
+import type { AudioMessageHandler } from '../../src/core/channel/whatsapp-evolution/index.js';
 import { createLogger } from '../../src/core/logger.js';
 import type { CommandMatcher } from '../../src/core/kernel/types.js';
 
@@ -24,7 +25,21 @@ function textPayload(waMessageId: string, text: string) {
   };
 }
 
-function buildFastify(onUnmatchedText: (text: string, jid: string, messageId: number) => Promise<void>) {
+function audioPayload(waMessageId: string) {
+  return {
+    event: 'messages.upsert',
+    instance: INSTANCE,
+    data: {
+      key: { remoteJid: OWNER_JID, id: waMessageId, fromMe: false },
+      message: { audioMessage: { mimetype: 'audio/ogg' } },
+    },
+  };
+}
+
+function buildFastify(
+  onUnmatchedText: (text: string, jid: string, messageId: number) => Promise<void>,
+  onAudioMessage?: AudioMessageHandler,
+) {
   const db = new Database(':memory:');
   runMigrations(db, coreMigrations);
 
@@ -44,6 +59,7 @@ function buildFastify(onUnmatchedText: (text: string, jid: string, messageId: nu
     connectionWatchdog: new ConnectionWatchdog(),
     logger,
     onUnmatchedText,
+    ...(onAudioMessage ? { onAudioMessage } : {}),
   });
 
   return { fastify, db, messageRepository, errorSpy };
@@ -123,7 +139,7 @@ describe('registro do webhook: ACK imediato + processamento em background (ADR-0
     );
   });
 
-  it('mensagem sem texto (áudio/imagem, fora de escopo) é marcada processed sem acionar o processamento', async () => {
+  it('mensagem de áudio sem onAudioMessage configurado (rota sem FEAT-003) é marcada processed sem acionar o processamento', async () => {
     const onUnmatchedText = vi.fn(async () => undefined);
     const ctx = buildFastify(onUnmatchedText);
     fastify = ctx.fastify;
@@ -152,5 +168,66 @@ describe('registro do webhook: ACK imediato + processamento em background (ADR-0
       processing_status: string;
     };
     expect(row.processing_status).toBe('processed');
+  });
+
+  it('FEAT-003: com onAudioMessage configurado, responde 2xx antes do processamento de áudio terminar', async () => {
+    let resolveProcessing: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      resolveProcessing = resolve;
+    });
+    let processingStarted = false;
+
+    const onAudioMessage: AudioMessageHandler = async () => {
+      processingStarted = true;
+      await gate;
+    };
+    const ctx = buildFastify(async () => undefined, onAudioMessage);
+    fastify = ctx.fastify;
+    db = ctx.db;
+
+    const response = await ctx.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: audioPayload('wa-audio-2'),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(processingStarted).toBe(true);
+
+    const row = ctx.db.prepare(`SELECT processing_status FROM messages WHERE wa_message_id = 'wa-audio-2'`).get() as {
+      processing_status: string;
+    };
+    expect(row.processing_status).toBe('pending');
+
+    resolveProcessing!();
+  });
+
+  it('FEAT-003: onAudioMessage lançando exceção marca a mensagem como failed e loga o erro', async () => {
+    const onAudioMessage: AudioMessageHandler = async () => {
+      throw new Error('falha simulada no processamento de áudio');
+    };
+    const ctx = buildFastify(async () => undefined, onAudioMessage);
+    fastify = ctx.fastify;
+    db = ctx.db;
+
+    const response = await ctx.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: audioPayload('wa-audio-3'),
+    });
+
+    expect(response.statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const row = ctx.db.prepare(`SELECT processing_status FROM messages WHERE wa_message_id = 'wa-audio-3'`).get() as {
+      processing_status: string;
+    };
+    expect(row.processing_status).toBe('failed');
+    expect(ctx.errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ waMessageId: 'wa-audio-3' }),
+      expect.stringContaining('falha ao processar áudio'),
+    );
   });
 });

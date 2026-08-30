@@ -28,6 +28,8 @@ export function buildTestEnv(overrides: TestAppOverrides = {}): Env {
     SMTP_URL: undefined,
     ALERT_EMAIL: undefined,
     ANTHROPIC_API_KEY: 'test-anthropic-api-key',
+    GROQ_API_KEY: 'test-groq-api-key',
+    OPENAI_API_KEY: 'test-openai-api-key',
     ...overrides,
   };
 }

@@ -281,4 +281,57 @@ describe('suite de segurança/isolamento do webhook (TESTING.md §3)', () => {
     const healthResponse = await app.fastify.inject({ method: 'GET', url: '/health' });
     expect(healthResponse.statusCode).toBe(200);
   });
+
+  it('S10 (FEAT-003): payload de audioMessage com tipo inesperado é rejeitado pela validação zod, processo não cai', async () => {
+    const response = await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: {
+        event: 'messages.upsert',
+        instance: INSTANCE,
+        data: {
+          key: { remoteJid: OWNER_JID, id: 'wa-audio-malformado', fromMe: false },
+          // seconds deveria ser number — string quebra o contrato do protobuf.
+          message: { audioMessage: { seconds: 'nao-e-numero' } },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(messagesCount(app)).toBe(0);
+
+    const healthResponse = await app.fastify.inject({ method: 'GET', url: '/health' });
+    expect(healthResponse.statusCode).toBe(200);
+  });
+
+  it('FEAT-003: busca de mídia nunca usa base64 do payload do webhook, mesmo quando presente (SECURITY.md §6)', async () => {
+    const { calls } = stubFetch((call) => {
+      if (call.url.includes('getBase64FromMediaMessage')) return jsonResponse(200, { base64: 'BUSCADO-ATIVAMENTE' });
+      return jsonResponse(200, { status: 'success' });
+    });
+
+    // payload traz um campo base64 dentro de audioMessage — o schema aceita
+    // (passthrough) mas o adapter nunca deveria ler esse valor.
+    const response = await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: {
+        event: 'messages.upsert',
+        instance: INSTANCE,
+        data: {
+          key: { remoteJid: OWNER_JID, id: 'wa-audio-base64-payload', fromMe: false },
+          message: { audioMessage: { mimetype: 'audio/ogg', base64: 'BASE64-DO-PAYLOAD-NAO-CONFIAVEL' } },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    await app.waitForPendingProcessing();
+
+    const mediaCall = calls.find((c) => c.url.includes('getBase64FromMediaMessage'));
+    expect(mediaCall).toBeDefined();
+    expect(mediaCall!.init!.body as string).not.toContain('BASE64-DO-PAYLOAD-NAO-CONFIAVEL');
+  });
 });
