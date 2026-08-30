@@ -7,6 +7,7 @@ import { ItemService } from '../../src/modules/tasks/item-service.js';
 import { buildTasksTools, UnrecognizedDateError } from '../../src/modules/tasks/tools.js';
 
 const FIXED_NOW = new Date('2026-08-25T13:00:00.000Z');
+const TEST_CTX = { messageId: 1 };
 
 function buildTools() {
   const db = new Database(':memory:');
@@ -43,6 +44,7 @@ describe('tools do task-store (strict, ADR-014)', () => {
 
     const output = (await createItem.handler(
       createItem.inputSchema.parse({ type: 'tarefa', title: 'pagar boleto', origin: 'texto' }),
+      TEST_CTX,
     )) as { id: number; status: string };
 
     expect(output.status).toBe('ativa');
@@ -54,6 +56,7 @@ describe('tools do task-store (strict, ADR-014)', () => {
 
     const output = (await createItem.handler(
       createItem.inputSchema.parse({ type: 'tarefa', title: 'algo incerto', origin: 'texto', ambiguous: true }),
+      TEST_CTX,
     )) as { status: string };
 
     expect(output.status).toBe('inbox');
@@ -65,10 +68,10 @@ describe('tools do task-store (strict, ADR-014)', () => {
     service.snoozeByText(item.id, 'sexta');
 
     const listItems = findTool(tools, 'list_items');
-    const output = (await listItems.handler(listItems.inputSchema.parse({ includeInbox: true }))) as Record<
-      string,
-      unknown
-    >[];
+    const output = (await listItems.handler(
+      listItems.inputSchema.parse({ includeInbox: true }),
+      TEST_CTX,
+    )) as Record<string, unknown>[];
 
     expect(output).toHaveLength(1);
     expect(Object.keys(output[0]!)).not.toContain('snoozeCount');
@@ -80,7 +83,7 @@ describe('tools do task-store (strict, ADR-014)', () => {
     const item = service.create({ type: 'tarefa', title: 'x', origin: 'texto' });
 
     const completeItem = findTool(tools, 'complete_item');
-    const output = (await completeItem.handler(completeItem.inputSchema.parse({ id: item.id }))) as {
+    const output = (await completeItem.handler(completeItem.inputSchema.parse({ id: item.id }), TEST_CTX)) as {
       status: string;
     };
 
@@ -92,7 +95,9 @@ describe('tools do task-store (strict, ADR-014)', () => {
     const item = service.create({ type: 'tarefa', title: 'x', origin: 'texto' });
 
     const dropItem = findTool(tools, 'drop_item');
-    const output = (await dropItem.handler(dropItem.inputSchema.parse({ id: item.id }))) as { status: string };
+    const output = (await dropItem.handler(dropItem.inputSchema.parse({ id: item.id }), TEST_CTX)) as {
+      status: string;
+    };
 
     expect(output.status).toBe('dropada');
   });
@@ -104,7 +109,10 @@ describe('tools do task-store (strict, ADR-014)', () => {
     const snoozeItem = findTool(tools, 'snooze_item');
 
     await expect(
-      snoozeItem.handler(snoozeItem.inputSchema.parse({ id: item.id, relativeDateText: 'não sei quando' })),
+      snoozeItem.handler(
+        snoozeItem.inputSchema.parse({ id: item.id, relativeDateText: 'não sei quando' }),
+        TEST_CTX,
+      ),
     ).rejects.toThrow(UnrecognizedDateError);
   });
 });

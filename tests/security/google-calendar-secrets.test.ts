@@ -67,7 +67,7 @@ function buildContext() {
     insertEvent: vi.fn(),
   };
 
-  const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() };
+  const alerter: FailureAlerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn(), alertAnchorRitualCapped: vi.fn() };
 
   const logs: unknown[] = [];
   const logger = {
@@ -193,7 +193,7 @@ describe('Suite S (TESTING.md §3), estendida FEAT-005: tokens do Google Calenda
         jobRepository: new JobRepository(ctx.db),
         getSettings: () => ({ vesperaHour: 20, manhaHour: 8, prepMarginMin: 15 }),
       }),
-      alerter: { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn() },
+      alerter: { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn(), alertAnchorRitualCapped: vi.fn() },
       logger: realLogger,
       getDeslocamentoMinDefault: () => 30,
     });

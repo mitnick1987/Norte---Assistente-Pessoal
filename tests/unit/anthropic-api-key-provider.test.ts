@@ -26,7 +26,30 @@ describe('AnthropicApiKeyProvider', () => {
     expect(result.usage).toEqual({ tokensIn: 120, tokensOut: 30, cacheReadTokens: 90 });
   });
 
-  it('extrai tool_use blocks como toolCalls', async () => {
+  it('extrai tool_use blocks como toolCalls, incluindo o id (necessário para casar tool_result no loop)', async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse(200, {
+        content: [
+          { type: 'tool_use', id: 'toolu_1', name: 'submit_triage', input: { classification: 'conversa', items: [] } },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 },
+      }),
+    );
+    const provider = new AnthropicApiKeyProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    const result = await provider.complete({
+      model: 'claude-haiku-4-5-20251001',
+      systemPrompt: 'sistema',
+      messages: [{ role: 'user', content: 'oi' }],
+      maxTokens: 100,
+    });
+
+    expect(result.toolCalls).toEqual([
+      { id: 'toolu_1', toolName: 'submit_triage', input: { classification: 'conversa', items: [] } },
+    ]);
+  });
+
+  it('gera um id de fallback quando a resposta não traz um (defensivo — a API real sempre traz)', async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse(200, {
         content: [{ type: 'tool_use', name: 'submit_triage', input: { classification: 'conversa', items: [] } }],
@@ -42,7 +65,42 @@ describe('AnthropicApiKeyProvider', () => {
       maxTokens: 100,
     });
 
-    expect(result.toolCalls).toEqual([{ toolName: 'submit_triage', input: { classification: 'conversa', items: [] } }]);
+    expect(result.toolCalls[0]?.id).toBe('tool_use_0');
+  });
+
+  it('marca o system prompt como cacheável quando cacheSystemPrompt=true (ADR-007)', async () => {
+    const fetchFn = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      jsonResponse(200, { content: [{ type: 'text', text: 'oi' }], usage: {} }),
+    );
+    const provider = new AnthropicApiKeyProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await provider.complete({
+      model: 'claude-sonnet-4-5-20250929',
+      systemPrompt: 'sistema estável',
+      messages: [{ role: 'user', content: 'oi' }],
+      maxTokens: 100,
+      cacheSystemPrompt: true,
+    });
+
+    const body = JSON.parse(String(fetchFn.mock.calls[0]?.[1]?.body)) as { system: unknown };
+    expect(body.system).toEqual([{ type: 'text', text: 'sistema estável', cache_control: { type: 'ephemeral' } }]);
+  });
+
+  it('sem cacheSystemPrompt, o system continua string simples (comportamento pré-FEAT-006, byte a byte)', async () => {
+    const fetchFn = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      jsonResponse(200, { content: [{ type: 'text', text: 'oi' }], usage: {} }),
+    );
+    const provider = new AnthropicApiKeyProvider({ apiKey: 'key', fetchFn: fetchFn as unknown as typeof fetch });
+
+    await provider.complete({
+      model: 'claude-haiku-4-5-20251001',
+      systemPrompt: 'sistema da triagem',
+      messages: [{ role: 'user', content: 'oi' }],
+      maxTokens: 100,
+    });
+
+    const body = JSON.parse(String(fetchFn.mock.calls[0]?.[1]?.body)) as { system: unknown };
+    expect(body.system).toBe('sistema da triagem');
   });
 
   it('nunca inclui a api key em nenhum campo do corpo da requisição', async () => {

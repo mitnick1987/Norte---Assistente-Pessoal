@@ -91,7 +91,7 @@ describe('MessageRepository', () => {
     const first = repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-1', body: 'a' });
     repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-2', body: 'b' });
     repository.markProcessed((first as { messageId: number }).messageId);
-    repository.recordOutbound('jid-1', 'resposta'); // out nunca deveria aparecer aqui
+    repository.recordOutbound('jid-1', 'resposta', false); // out nunca deveria aparecer aqui
 
     const pending = repository.findPendingInbound();
 
@@ -173,5 +173,46 @@ describe('MessageRepository', () => {
       transcricao: string;
     };
     expect(row.transcricao).toBe('lembra de comprar ração amanhã');
+  });
+
+  describe('findRecentConversation (FEAT-006 item 4)', () => {
+    it('inclui turnos reais de entrada e saída, na ordem cronológica', () => {
+      const { repository } = buildRepository();
+      repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-1', body: 'oi, marca reunião sexta' });
+      repository.recordOutbound('jid-1', 'marquei pra sexta às 10h', false);
+
+      const conversation = repository.findRecentConversation('jid-1', 20);
+
+      expect(conversation).toEqual([
+        { direction: 'in', body: 'oi, marca reunião sexta' },
+        { direction: 'out', body: 'marquei pra sexta às 10h' },
+      ]);
+    });
+
+    it('exclui mensagem proativa (briefing/revisão/lembrete) da janela — não é turno de conversa', () => {
+      const { repository } = buildRepository();
+      repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-1', body: 'oi' });
+      repository.recordOutbound('jid-1', 'oi, tudo bem?', false);
+      repository.recordOutbound('jid-1', 'bom dia! hoje você tem 3 compromissos...', true); // briefing
+
+      const conversation = repository.findRecentConversation('jid-1', 20);
+
+      expect(conversation).toEqual([
+        { direction: 'in', body: 'oi' },
+        { direction: 'out', body: 'oi, tudo bem?' },
+      ]);
+      expect(conversation.map((m) => m.body)).not.toContain('bom dia! hoje você tem 3 compromissos...');
+    });
+
+    it('exclui linha de recordLlmUsage (sem body) e mensagem de outro jid', () => {
+      const { repository } = buildRepository();
+      repository.tryRecordInbound({ jid: 'jid-1', waMessageId: 'wa-1', body: 'oi' });
+      repository.recordLlmUsage({ jid: 'jid-1', intent: 'triagem', tokensIn: 10, tokensOut: 5, cacheReadTokens: 0 });
+      repository.tryRecordInbound({ jid: 'jid-2', waMessageId: 'wa-2', body: 'mensagem de outro contato' });
+
+      const conversation = repository.findRecentConversation('jid-1', 20);
+
+      expect(conversation).toEqual([{ direction: 'in', body: 'oi' }]);
+    });
   });
 });

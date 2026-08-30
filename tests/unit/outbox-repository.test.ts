@@ -114,4 +114,31 @@ describe('OutboxRepository', () => {
 
     expect(repository.countProactiveSentSince(sinceIso)).toBe(0);
   });
+
+  it('findPending prioriza ritual-âncora (briefing/revisão) sobre proativa comum enfileirada antes (achado de review FEAT-006)', () => {
+    const { repository } = buildRepository();
+
+    const reminderId = repository.enqueue({ jid: 'jid-1', body: 'lembrete comum', isProactive: true });
+    const briefingId = repository.enqueue({
+      jid: 'jid-1',
+      body: 'briefing de hoje',
+      isProactive: true,
+      isAnchorRitual: true,
+    });
+
+    const pending = repository.findPending(new Date().toISOString());
+
+    expect(pending.map((m) => m.id)).toEqual([briefingId, reminderId]);
+  });
+
+  it('findPending mantém ordem de chegada entre mensagens do mesmo nível de prioridade', () => {
+    const { repository } = buildRepository();
+
+    const first = repository.enqueue({ jid: 'jid-1', body: 'primeira', isProactive: true });
+    const second = repository.enqueue({ jid: 'jid-1', body: 'segunda', isProactive: true });
+
+    const pending = repository.findPending(new Date().toISOString());
+
+    expect(pending.map((m) => m.id)).toEqual([first, second]);
+  });
 });

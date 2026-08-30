@@ -161,10 +161,13 @@ describe('suite de segurança/isolamento do webhook (TESTING.md §3)', () => {
     expect(second.statusCode).toBe(200);
     expect(JSON.parse(second.body)).toMatchObject({ deduped: true });
 
-    // 1 mensagem de entrada (dedup) + 1 registro de uso da triagem (RF-15) —
-    // a segunda entrega é bloqueada pelo dedup antes de chegar à triagem, e
-    // por isso não soma mais nenhuma linha em nenhuma das duas tabelas.
-    expect(messagesCount(app)).toBe(2);
+    // 1 mensagem de entrada (dedup) + 1 registro de uso da triagem (RF-15) +
+    // 1 registro de uso do brain (FEAT-006: triagem sem tool call válida cai
+    // em "conversa", que aciona o brain — o stub genérico devolve corpo sem
+    // tool_use nem texto para as duas chamadas) — a segunda entrega é
+    // bloqueada pelo dedup antes de chegar à triagem, e por isso não soma
+    // mais nenhuma linha em nenhuma das duas tabelas.
+    expect(messagesCount(app)).toBe(3);
     expect(outboxCount(app)).toBe(1);
   });
 

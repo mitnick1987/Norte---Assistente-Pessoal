@@ -1,7 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import type { Logger } from 'pino';
 import type { ModuleManifest } from '../../core/kernel/types.js';
-import type { LlmProvider } from '../../core/llm/index.js';
+import type { BrainToolDefinition, LlmProvider, LlmUsage, PromptFragmentSource } from '../../core/llm/index.js';
 import type { JobRepository } from '../../core/scheduler/index.js';
 import type { OutboxRepository } from '../../core/outbox/index.js';
 import type { AudioRecoveryData, IncomingAudio, MediaFetcher, MessageRepository } from '../../core/channel/index.js';
@@ -16,6 +16,7 @@ import {
 import type { AudioLimits } from './domain/index.js';
 import { TriageService } from './triage-service.js';
 import { CaptureService, type RemoteCalendarPort } from './capture-service.js';
+import { BrainService, CONVERSATION_WINDOW_SIZE } from './brain-service.js';
 import { buildCaptureDispatcher } from './capture-dispatcher.js';
 import { AudioCaptureService } from './audio-capture-service.js';
 import { buildReminderJobHandler } from './reminder-job.js';
@@ -37,6 +38,18 @@ export interface CaptureModuleDeps {
   readonly db: Database;
   /** Ausente quando o Google nunca foi autorizado (env sem credenciais) — captura degrada graciosamente sem evento remoto (ADR-019). */
   readonly googleCalendarService?: RemoteCalendarPort;
+  /**
+   * Thunks avaliados em tempo de request, nunca no boot (FEAT-006): o
+   * registry de tools/módulos só fica completo depois que `app.ts` registra
+   * todos os módulos (inclusive `capture` e `google-calendar`), então não
+   * dá para passar a lista pronta na hora em que este módulo nasce — isso
+   * criaria uma dependência circular (`capture` precisaria do próprio
+   * registry que ainda está sendo montado). Ausentes só em teste que não
+   * exercita conversa livre.
+   */
+  readonly getBrainTools?: () => readonly BrainToolDefinition[];
+  readonly getActiveModules?: () => readonly PromptFragmentSource[];
+  readonly onBrainUsage?: (usage: LlmUsage) => void;
   /** Injetável para teste — data/hora do prompt da triagem, seleção de tom e disparo de reminder (TESTING.md §7). */
   readonly now?: () => Date;
 }
@@ -117,11 +130,25 @@ export function buildCaptureModule(deps: CaptureModuleDeps): {
       Number(deps.settings.get<number>(CHAINS_DESLOCAMENTO_MIN_DEFAULT_SETTING) ?? CHAINS_DESLOCAMENTO_MIN_DEFAULT_DEFAULT),
   });
 
+  const brainService =
+    deps.getBrainTools && deps.getActiveModules
+      ? new BrainService({
+          llmProvider: deps.llmProvider,
+          getTools: deps.getBrainTools,
+          getActiveModules: deps.getActiveModules,
+          logger: deps.logger,
+          ...(deps.onBrainUsage ? { onUsage: deps.onBrainUsage } : {}),
+          ...(deps.now ? { now: deps.now } : {}),
+        })
+      : undefined;
+
   const dispatch = buildCaptureDispatcher({
     triageService,
     captureService,
     outboxRepository: deps.outboxRepository,
     logger: deps.logger,
+    ...(brainService ? { brainService } : {}),
+    getRecentConversation: (jid) => deps.messageRepository.findRecentConversation(jid, CONVERSATION_WINDOW_SIZE),
     ...(deps.now ? { now: deps.now } : {}),
   });
 

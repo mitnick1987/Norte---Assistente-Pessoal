@@ -3,6 +3,7 @@ import {
   LlmTimeoutError,
   type LlmCompletionRequest,
   type LlmCompletionResult,
+  type LlmMessage,
   type LlmProvider,
   type LlmToolCall,
 } from './provider.js';
@@ -20,6 +21,7 @@ export interface AnthropicApiKeyProviderConfig {
 interface AnthropicContentBlock {
   readonly type: string;
   readonly text?: string;
+  readonly id?: string;
   readonly name?: string;
   readonly input?: unknown;
 }
@@ -101,8 +103,8 @@ export class AnthropicApiKeyProvider implements LlmProvider {
     return {
       model: request.model,
       max_tokens: request.maxTokens,
-      system: request.systemPrompt,
-      messages: request.messages.map((m) => ({ role: m.role, content: m.content })),
+      system: this.buildSystemField(request),
+      messages: request.messages.map((m) => ({ role: m.role, content: this.buildMessageContent(m) })),
       ...(request.tools && request.tools.length > 0
         ? {
             tools: request.tools.map((t) => ({
@@ -115,13 +117,38 @@ export class AnthropicApiKeyProvider implements LlmProvider {
     };
   }
 
+  /**
+   * `cache_control` só se aplica a um bloco estruturado, nunca a uma string
+   * solta — sem `cacheSystemPrompt` (caso da triagem) mandamos o formato
+   * simples de sempre, que é byte a byte o que já ia antes desta feature.
+   */
+  private buildSystemField(request: LlmCompletionRequest): unknown {
+    if (!request.cacheSystemPrompt) return request.systemPrompt;
+    return [{ type: 'text', text: request.systemPrompt, cache_control: { type: 'ephemeral' } }];
+  }
+
+  private buildMessageContent(message: LlmMessage): unknown {
+    if (typeof message.content === 'string') return message.content;
+
+    return message.content.map((block) => {
+      if (block.type === 'text') return { type: 'text', text: block.text };
+      if (block.type === 'tool_use') return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
+      return {
+        type: 'tool_result',
+        tool_use_id: block.toolUseId,
+        content: block.content,
+        ...(block.isError ? { is_error: true } : {}),
+      };
+    });
+  }
+
   private parseResponse(body: AnthropicResponseBody): LlmCompletionResult {
     const blocks = body.content ?? [];
 
     const textBlock = blocks.find((b) => b.type === 'text');
     const toolCalls: LlmToolCall[] = blocks
       .filter((b) => b.type === 'tool_use' && b.name)
-      .map((b) => ({ toolName: b.name!, input: b.input }));
+      .map((b, index) => ({ id: b.id ?? `tool_use_${index}`, toolName: b.name!, input: b.input }));
 
     return {
       text: textBlock?.text,

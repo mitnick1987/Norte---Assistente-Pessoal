@@ -41,4 +41,12 @@ export class EmailAlerter implements FailureAlerter {
     const message = context.err instanceof Error ? context.err.message : 'erro desconhecido';
     this.logger.error({ provider: context.provider, message }, 'alerta de falha de refresh OAuth');
   }
+
+  async alertAnchorRitualCapped(message: { id: number; jid: string }): Promise<void> {
+    if (!this.config.smtpUrl || !this.config.alertEmail) {
+      this.logger.error({ message }, 'ritual-âncora represado pelo teto diário sem transporte de e-mail configurado');
+      return;
+    }
+    this.logger.error({ message }, 'ritual-âncora (briefing/revisão) represado pelo teto diário de proativas');
+  }
 }

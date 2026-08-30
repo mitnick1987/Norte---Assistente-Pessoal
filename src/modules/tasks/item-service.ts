@@ -6,6 +6,7 @@ import {
   type ItemOrigin,
   type ItemPriority,
   type ItemRecord,
+  type ItemStatus,
   type ItemType,
   type TasksEventEmitter,
 } from './domain/index.js';
@@ -74,6 +75,11 @@ export class ItemService {
     return this.repository.findSourceItemIndexes(sourceMessageId);
   }
 
+  /** Idempotência do `create_event` do brain (FEAT-006 item 2, ADR-018): item já gravado para essa mensagem de conversa, se houver. */
+  findBySourceMessageId(sourceMessageId: number): ItemRecord | undefined {
+    return this.repository.findBySourceMessageId(sourceMessageId);
+  }
+
   private getOrThrow(id: number): ItemRecord {
     const item = this.repository.findById(id);
     if (!item) throw new ItemNotFoundError(id);
@@ -139,5 +145,10 @@ export class ItemService {
 
   findMostRecentActive(): ItemRecord | undefined {
     return this.repository.findMostRecentActive();
+  }
+
+  /** Itens que entraram em `status` dentro da janela — usado pelos rituais (briefing/revisão) para "o que fechou hoje"/"o que foi reagendado". */
+  listByStatusUpdatedBetween(status: ItemStatus, since: Date, until: Date): ItemRecord[] {
+    return this.repository.listByStatusUpdatedBetween(status, since, until);
   }
 }

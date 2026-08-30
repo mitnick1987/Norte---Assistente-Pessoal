@@ -98,8 +98,17 @@ export class MessageRepository {
     this.db.prepare(`UPDATE messages SET transcricao = ? WHERE id = ?`).run(transcricao, messageId);
   }
 
-  recordOutbound(jid: string, body: string): void {
-    this.db.prepare(`INSERT INTO messages (direction, jid, body) VALUES ('out', ?, ?)`).run(jid, body);
+  /**
+   * `isProactive` (FEAT-006 item 4) marca resposta de job (briefing, revisão,
+   * lembrete) — o outbox já carrega essa mesma flag desde o enqueue
+   * (`outbox_messages.is_proactive`, teto diário); aqui só espelhamos para
+   * `messages` porque é dali que `findRecentConversation` monta a janela do
+   * brain, e proativa nunca é turno de conversa.
+   */
+  recordOutbound(jid: string, body: string, isProactive: boolean): void {
+    this.db
+      .prepare(`INSERT INTO messages (direction, jid, body, is_proactive) VALUES ('out', ?, ?, ?)`)
+      .run(jid, body, isProactive ? 1 : 0);
   }
 
   /**
@@ -123,6 +132,31 @@ export class MessageRepository {
 
   markFailed(messageId: number): void {
     this.db.prepare(`UPDATE messages SET processing_status = 'failed' WHERE id = ?`).run(messageId);
+  }
+
+  /**
+   * Janela de conversa recente do brain (FEAT-006, spec item 4): só texto
+   * final de cada turno (`body IS NOT NULL` exclui as linhas que
+   * `recordLlmUsage` grava para o monitor de custo, que não são turno de
+   * conversa nenhum) e só diálogo real (`is_proactive = 0` exclui
+   * briefing/revisão/lembrete — mensagem que o assistente inicia por conta de
+   * um job, não em resposta a um turno do usuário; misturar as duas confunde
+   * o Sonnet sobre o que é histórico de conversa). Ordena por mais recente
+   * para aplicar o `limit` e inverte depois — é o jeito barato de pegar "os N
+   * últimos" sem varrer a tabela inteira em bancos que cresçam grandes.
+   */
+  findRecentConversation(jid: string, limit: number): { direction: 'in' | 'out'; body: string }[] {
+    const rows = this.db
+      .prepare<
+        [string, number],
+        { direction: 'in' | 'out'; body: string }
+      >(
+        `SELECT direction, body FROM messages
+         WHERE jid = ? AND body IS NOT NULL AND is_proactive = 0
+         ORDER BY id DESC LIMIT ?`,
+      )
+      .all(jid, limit);
+    return rows.reverse();
   }
 
   /**

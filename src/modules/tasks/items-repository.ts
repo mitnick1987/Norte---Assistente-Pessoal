@@ -1,4 +1,5 @@
 import type { Database } from 'better-sqlite3';
+import { parseSqliteUtcTimestamp } from '../../core/channel/domain/index.js';
 import type { ItemOrigin, ItemPriority, ItemRecord, ItemStatus, ItemType } from './domain/index.js';
 
 interface ItemRow {
@@ -105,6 +106,24 @@ export class ItemsRepository {
     return row ? toRecord(row) : undefined;
   }
 
+  /**
+   * Idempotência do `create_event` do brain (FEAT-006 item 2, ADR-018): uma
+   * mensagem de conversa só gera um item — reprocessamento (retry do loop de
+   * tool-use, varredura de recuperação do boot) encontra o item já gravado
+   * aqui em vez de criar um segundo evento remoto no Google. `source_item_index`
+   * não entra porque o brain nunca grava mais de um item por mensagem (isso é
+   * exclusivo da extração em lote da captura direta).
+   */
+  findBySourceMessageId(sourceMessageId: number): ItemRecord | undefined {
+    const row = this.db
+      .prepare<
+        [number],
+        ItemRow
+      >('SELECT * FROM items WHERE source_message_id = ? ORDER BY id ASC LIMIT 1')
+      .get(sourceMessageId);
+    return row ? toRecord(row) : undefined;
+  }
+
   private findByIdOrThrow(id: number): ItemRecord {
     const row = this.findById(id);
     if (!row) throw new Error(`item ${id} não encontrado logo após INSERT`);
@@ -126,6 +145,35 @@ export class ItemsRepository {
         ItemRow
       >(`SELECT * FROM items WHERE status IN (${placeholders}) ORDER BY due_at IS NULL, due_at ASC, created_at ASC`)
       .all(...filter.statuses)
+      .map(toRecord);
+  }
+
+  /**
+   * Itens que transicionaram para `status` dentro da janela `[since, until)`
+   * (RF-06, briefing/revisão): usa `updated_at` porque é o timestamp que a
+   * transição de status atualiza (item-service.ts) — não há coluna própria
+   * de "data da conclusão"/"data do reagendamento", e criar uma só para isso
+   * duplicaria informação que `updated_at` já carrega no caminho comum
+   * (nenhum item muda de status duas vezes na mesma janela de consulta de um
+   * ritual diário).
+   *
+   * O corte da janela é feito em JS, não em SQL: `updated_at` é gravado por
+   * `datetime('now')` (`YYYY-MM-DD HH:MM:SS`), formato que não bate
+   * lexicograficamente com `Date#toISOString()` (`YYYY-MM-DDTHH:MM:SS.sssZ`,
+   * ` ` 0x20 < `T` 0x54) — comparar as duas strings direto no SQL descartava
+   * silenciosamente todo item atualizado no dia (mesma armadilha documentada
+   * em `message-repository.ts`/`pending-recovery.ts`).
+   */
+  listByStatusUpdatedBetween(status: ItemStatus, since: Date, until: Date): ItemRecord[] {
+    const rows = this.db
+      .prepare<[string], ItemRow>('SELECT * FROM items WHERE status = ? ORDER BY updated_at ASC')
+      .all(status);
+
+    return rows
+      .filter((row) => {
+        const updatedAt = parseSqliteUtcTimestamp(row.updated_at).getTime();
+        return updatedAt >= since.getTime() && updatedAt < until.getTime();
+      })
       .map(toRecord);
   }
 

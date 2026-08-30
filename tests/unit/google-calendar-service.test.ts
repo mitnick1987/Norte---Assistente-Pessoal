@@ -17,6 +17,7 @@ import {
   GoogleCalendarService,
   GoogleTokenRefreshError,
   InvalidOAuthStateError,
+  InvalidEventDateError,
 } from '../../src/modules/integrations/google-calendar/google-calendar-service.js';
 import { AuthTokenNotFoundError } from '../../src/modules/integrations/google-calendar/domain/index.js';
 import type { GoogleOAuthPort, GoogleTokenSet } from '../../src/modules/integrations/google-calendar/google-oauth-client.js';
@@ -58,6 +59,7 @@ function buildContext(oauthOverrides: Partial<GoogleOAuthPort> = {}) {
   const alerter: FailureAlerter = {
     alertDeliveryExhausted: vi.fn(),
     alertRefreshFailure: vi.fn(),
+    alertAnchorRitualCapped: vi.fn(),
   };
 
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
@@ -459,5 +461,168 @@ describe('GoogleCalendarService — sincronização mínima com cadeias (spec it
 
     expect(eventService.findByGcalId('gcal-feriado')).toBeUndefined();
     expect(jobRepository.findPending()).toHaveLength(0);
+  });
+});
+
+describe('GoogleCalendarService — createEventFromBrain (tool create_event, FEAT-006)', () => {
+  function upsertValidToken(tokensRepository: ReturnType<typeof buildContext>['tokensRepository'], cipher: ReturnType<typeof buildContext>['cipher']): void {
+    tokensRepository.upsert({
+      provider: 'google_calendar',
+      accessTokenEncrypted: cipher.encrypt('access-token'),
+      refreshTokenEncrypted: cipher.encrypt('refresh-token'),
+      expiry: new Date(FIXED_NOW.getTime() + 3_600_000),
+      scopes: 'https://www.googleapis.com/auth/calendar.events',
+    });
+  }
+
+  it('input válido cria evento remoto + item/event interno + cadeia numa única operação', async () => {
+    const ctx = buildContext({
+      insertEvent: vi.fn().mockResolvedValue({
+        gcalId: 'gcal-brain-1',
+        title: 'Reunião com cliente',
+        start: { dateTime: '2026-09-04T10:00:00-03:00' },
+        end: { dateTime: '2026-09-04T11:00:00-03:00' },
+      }),
+    });
+    upsertValidToken(ctx.tokensRepository, ctx.cipher);
+
+    const result = await ctx.service.createEventFromBrain({
+      title: 'Reunião com cliente',
+      startAt: new Date('2026-09-04T13:00:00.000Z'),
+      endAt: new Date('2026-09-04T14:00:00.000Z'),
+      sourceMessageId: 1,
+    });
+
+    expect(result.gcalId).toBe('gcal-brain-1');
+    const item = ctx.itemService.list({ includeInbox: true }).find((i) => i.id === result.itemId);
+    expect(item).toBeDefined();
+    expect(item!.type).toBe('compromisso');
+
+    const event = ctx.eventService.findActiveByItemId(result.itemId);
+    expect(event).toBeDefined();
+    expect(event!.gcalId).toBe('gcal-brain-1');
+
+    // cadeia gerada (véspera/manhã/preparo) — mesma sequência que `syncEvent` já garante.
+    expect(ctx.jobRepository.findPending().length).toBeGreaterThan(0);
+  });
+
+  it('reprocessar a mesma mensagem de conversa (varredura de recuperação do boot) nunca cria um segundo evento no Google', async () => {
+    // Cada chamada real ao Google cria um evento NOVO com um gcalId próprio
+    // (diferente da reentrega idempotente do lado do Google testada acima) —
+    // é exatamente esse cenário que expõe o bug sem a checagem de
+    // `sourceMessageId`: duas chamadas a `createEventFromBrain` sem
+    // idempotência própria geram dois eventos reais distintos.
+    let callCount = 0;
+    const insertEvent = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return {
+        gcalId: `gcal-brain-reproc-${callCount}`,
+        title: 'Dentista',
+        start: { dateTime: '2026-09-04T10:00:00-03:00' },
+        end: { dateTime: '2026-09-04T11:00:00-03:00' },
+      };
+    });
+    const ctx = buildContext({ insertEvent });
+    upsertValidToken(ctx.tokensRepository, ctx.cipher);
+
+    const params = {
+      title: 'Dentista',
+      startAt: new Date('2026-09-04T13:00:00.000Z'),
+      endAt: new Date('2026-09-04T14:00:00.000Z'),
+      sourceMessageId: 77,
+    };
+
+    const first = await ctx.service.createEventFromBrain(params);
+    const second = await ctx.service.createEventFromBrain(params);
+
+    expect(insertEvent).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+
+    const itemsCount = ctx.db.prepare(`SELECT COUNT(*) as c FROM items WHERE type = 'compromisso'`).get() as {
+      c: number;
+    };
+    expect(itemsCount.c).toBe(1);
+  });
+
+  it('endAt ausente aplica duração default de 1h', async () => {
+    const insertEvent = vi.fn().mockResolvedValue({
+      gcalId: 'gcal-brain-2',
+      title: 'Call rápida',
+      start: { dateTime: '2026-09-04T10:00:00-03:00' },
+      end: { dateTime: '2026-09-04T11:00:00-03:00' },
+    });
+    const ctx = buildContext({ insertEvent });
+    upsertValidToken(ctx.tokensRepository, ctx.cipher);
+
+    await ctx.service.createEventFromBrain({
+      title: 'Call rápida',
+      startAt: new Date('2026-09-04T13:00:00.000Z'),
+      endAt: new Date('2026-09-04T14:00:00.000Z'),
+      sourceMessageId: 1,
+    });
+
+    expect(insertEvent).toHaveBeenCalledWith(
+      'access-token',
+      expect.objectContaining({ startAt: new Date('2026-09-04T13:00:00.000Z'), endAt: new Date('2026-09-04T14:00:00.000Z') }),
+    );
+  });
+
+  it('data no passado distante é rejeitada antes de chamar o Google', async () => {
+    const ctx = buildContext();
+    upsertValidToken(ctx.tokensRepository, ctx.cipher);
+
+    await expect(
+      ctx.service.createEventFromBrain({
+        title: 'Evento suspeito',
+        startAt: new Date('2020-01-01T13:00:00.000Z'),
+        endAt: new Date('2020-01-01T14:00:00.000Z'),
+        sourceMessageId: 1,
+      }),
+    ).rejects.toThrow(InvalidEventDateError);
+    expect(ctx.oauthClient.insertEvent).not.toHaveBeenCalled();
+  });
+
+  it('ano absurdamente no futuro é rejeitado antes de chamar o Google', async () => {
+    const ctx = buildContext();
+    upsertValidToken(ctx.tokensRepository, ctx.cipher);
+
+    await expect(
+      ctx.service.createEventFromBrain({
+        title: 'Evento distante demais',
+        startAt: new Date('2099-01-01T13:00:00.000Z'),
+        endAt: new Date('2099-01-01T14:00:00.000Z'),
+        sourceMessageId: 1,
+      }),
+    ).rejects.toThrow(InvalidEventDateError);
+    expect(ctx.oauthClient.insertEvent).not.toHaveBeenCalled();
+  });
+
+  it('endAt antes ou igual a startAt é rejeitado', async () => {
+    const ctx = buildContext();
+    upsertValidToken(ctx.tokensRepository, ctx.cipher);
+
+    await expect(
+      ctx.service.createEventFromBrain({
+        title: 'Evento invertido',
+        startAt: new Date('2026-09-04T14:00:00.000Z'),
+        endAt: new Date('2026-09-04T13:00:00.000Z'),
+        sourceMessageId: 1,
+      }),
+    ).rejects.toThrow(InvalidEventDateError);
+  });
+
+  it('sem token armazenado, propaga AuthTokenNotFoundError sem gravar item/event órfão', async () => {
+    const ctx = buildContext();
+
+    await expect(
+      ctx.service.createEventFromBrain({
+        title: 'Reunião',
+        startAt: new Date('2026-09-04T13:00:00.000Z'),
+        endAt: new Date('2026-09-04T14:00:00.000Z'),
+        sourceMessageId: 1,
+      }),
+    ).rejects.toThrow(AuthTokenNotFoundError);
+
+    expect(ctx.itemService.list({ includeInbox: true })).toHaveLength(0);
   });
 });
