@@ -30,13 +30,15 @@ Pré-requisitos: Node 22, Docker Desktop (perfil `local` do Compose — ADR-013)
 
    Preencha pelo menos `EVOLUTION_API_KEY`, `EVOLUTION_POSTGRES_PASSWORD`, `EVOLUTION_WEBHOOK_SECRET` (≥ 32 caracteres), `OWNER_WHATSAPP_JID` (o número do dono, formato `55DDDNUMERO@s.whatsapp.net`), `ANTHROPIC_API_KEY` (triagem e brain) e `GROQ_API_KEY` (transcrição de áudio). `GOOGLE_*` (agenda) e `SMTP_URL`/`RESEND_API_KEY` + `ALERT_EMAIL` (alertas) são opcionais e podem ser configurados depois.
 
-2. Suba a Evolution API e o brain (perfil local — sem Caddy, sem Litestream, portas só em `localhost`). O arquivo `docker-compose.local.yml` é o que publica a porta do painel da Evolution — nunca combinar esse override em produção:
+2. Suba a Evolution API e o brain (perfil local — sem Caddy, sem Litestream, portas só em `localhost`). O arquivo `docker-compose.local.yml` é o que publica a porta do painel da Evolution — nunca combinar esse override em produção. Passe `--env-file .env` explícito: rodando da raiz com `-f infra/...`, o Compose procura o `.env` no diretório dos arquivos (`infra/`), não na raiz — sem o flag, a interpolação dos segredos falha com `required variable ... is missing`:
 
    ```
-   docker compose -f infra/docker-compose.yml -f infra/docker-compose.local.yml --profile local up
+   docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.local.yml --profile local up
    ```
 
-3. Pareie o WhatsApp: abra o painel da Evolution (`http://localhost:8080`) com a `EVOLUTION_API_KEY`, crie/abra a instância configurada em `EVOLUTION_INSTANCE` e escaneie o QR code com o **chip dedicado do Norte** — nunca o número pessoal (ADR-005). O brain se autoprovisiona no webhook da Evolution assim que sobe (retry com backoff enquanto a Evolution não responde) — não é preciso configurar nada manualmente no painel.
+   Se a porta `8080` já estiver ocupada por outro serviço na sua máquina, troque o mapeamento em `docker-compose.local.yml` (ex.: `127.0.0.1:8765:8080`) — o brain fala com a Evolution pela rede interna, então mudar a porta do host não afeta o funcionamento.
+
+3. Pareie o WhatsApp: abra o painel da Evolution (`http://localhost:8080`, ou a porta que você escolheu) com a `EVOLUTION_API_KEY`, crie/abra a instância configurada em `EVOLUTION_INSTANCE` e escaneie o QR code com o **chip dedicado do Norte** — nunca o número pessoal (ADR-005). O brain se autoprovisiona no webhook da Evolution assim que sobe (retry com backoff enquanto a Evolution não responde) — não é preciso configurar nada manualmente no painel.
 
 4. Para desenvolver fora do container (hot reload):
 
