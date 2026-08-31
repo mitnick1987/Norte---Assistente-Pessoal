@@ -6,6 +6,7 @@ Stack: a definida em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Documentação
 
+- [docs/HANDOFF.md](docs/HANDOFF.md) — estado real do projeto agora: o que funciona, débitos, como assumir
 - [docs/PRD.md](docs/PRD.md) — o que estamos construindo e por quê
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — módulos, modelo de dados, ADRs
 - [docs/SECURITY.md](docs/SECURITY.md) — autenticação, autorização, secrets, borda
