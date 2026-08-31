@@ -29,7 +29,7 @@ services:
     networks: [norte_internal]
 
   evolution:
-    image: atendai/evolution-api:v2.3.7
+    image: evoapicloud/evolution-api:v2.3.7
     profiles: ['local', 'producao']
     restart: unless-stopped
     depends_on: [postgres, redis]
