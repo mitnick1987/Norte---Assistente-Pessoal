@@ -23,7 +23,21 @@ import {
   recoverPendingMessages,
 } from './core/channel/whatsapp-evolution/index.js';
 import { registerHealthRoute } from './core/health/index.js';
-import { EmailAlerter } from './infra-ops/index.js';
+import {
+  EmailAlerter,
+  buildMailer,
+  AlertDispatchRepository,
+  buildInfraOpsModule,
+  DEAD_MANS_SWITCH_JOB_TYPE,
+  COST_MONITOR_JOB_TYPE,
+  DEAD_MANS_SWITCH_INTERVAL_MINUTES_SETTING,
+  COST_MONITOR_INTERVAL_MINUTES_SETTING,
+  SCHEDULER_STALE_AFTER_MS_SETTING,
+  SCHEDULER_STALE_AFTER_MS_DEFAULT,
+  ALERT_ANTI_FLOOD_WINDOW_MS_SETTING,
+  ALERT_ANTI_FLOOD_WINDOW_MS_DEFAULT,
+  ensureRecurringJob,
+} from './infra-ops/index.js';
 import { AnthropicApiKeyProvider, type LlmUsage } from './core/llm/index.js';
 import { GroqSttProvider, OpenAiWhisperProvider, SttRouter } from './core/stt/index.js';
 import { buildTasksModule } from './modules/tasks/public/index.js';
@@ -157,7 +171,28 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     instance: env.EVOLUTION_INSTANCE,
   });
 
-  const alerter = new EmailAlerter({ smtpUrl: env.SMTP_URL, alertEmail: env.ALERT_EMAIL }, logger);
+  // Transporte real (FEAT-008): SMTP tem prioridade sobre Resend quando os
+  // dois estão configurados (build-mailer.ts). Sem nenhum dos dois, `mailer`
+  // fica undefined e o EmailAlerter cai em log `error` — nunca falha em
+  // silêncio (spec item 1).
+  const mailer = buildMailer({
+    smtpUrl: env.SMTP_URL,
+    resendApiKey: env.RESEND_API_KEY,
+    alertEmailFrom: env.ALERT_EMAIL_FROM,
+    alertEmail: env.ALERT_EMAIL,
+  });
+  const alertDispatchRepository = new AlertDispatchRepository(db);
+  const alerter = new EmailAlerter(
+    {
+      alertEmail: env.ALERT_EMAIL,
+      getAntiFloodWindowMs: () =>
+        Number(settings.get<number>(ALERT_ANTI_FLOOD_WINDOW_MS_SETTING) ?? ALERT_ANTI_FLOOD_WINDOW_MS_DEFAULT),
+    },
+    mailer,
+    alertDispatchRepository,
+    logger,
+    overrides.now ?? (() => new Date()),
+  );
 
   // Credenciais OAuth ausentes não podem derrubar o boot (spec item 5): o
   // setup é manual e único, feito bem depois do primeiro `docker compose up`.
@@ -297,6 +332,56 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
 
   const { manifest: ritualsManifest } = buildRitualsModule(ritualsModuleDeps);
 
+  // Nasce antes do registry por não conhecer módulos (ARCHITECTURE.md §2) —
+  // o watchdog só precisa existir a tempo de `onStateChange` acionar o
+  // alerter na primeira mudança de estado observada.
+  const connectionWatchdog = new ConnectionWatchdog({
+    onStateChange: (state) => {
+      // Só alerta em estado que exige ação humana de fato — 'close' (sessão
+      // caída) e 'qr_requested' (precisa re-scan). 'connecting' é reconexão
+      // de rotina que o Baileys resolve sozinho o tempo todo (a cada
+      // instabilidade de rede ele passa por 'connecting' antes de 'open' de
+      // novo); alertar nesse estado é falso positivo, não sinal real.
+      // 'unknown' é o estado inicial em memória, nunca uma transição real
+      // observada — alertar aqui seria ruído em todo boot do processo.
+      if (state !== 'close' && state !== 'qr_requested') return;
+      void alerter.alertSessionDown({ state }).catch((err: unknown) => {
+        logger.error({ err }, 'falha ao processar alerta de sessão caída');
+      });
+    },
+  });
+
+  // eslint-disable-next-line prefer-const -- mesmo padrão de `registry` acima: o thunk `getHealthInput` só lê `scheduler.getLastTickAt()` em tempo de request, bem depois da atribuição abaixo.
+  let scheduler: Scheduler;
+
+  function checkDbStatus(): 'ok' | 'error' {
+    try {
+      db.prepare('SELECT 1').get();
+      return 'ok';
+    } catch {
+      return 'error';
+    }
+  }
+
+  const { manifest: infraOpsManifest } = buildInfraOpsModule({
+    jobRepository,
+    messageRepository,
+    alerter,
+    logger,
+    healthchecksPingUrl: env.HEALTHCHECKS_PING_URL,
+    getHealthInput: () => ({
+      dbStatus: checkDbStatus(),
+      lastSchedulerTickAt: scheduler.getLastTickAt(),
+      whatsappState: connectionWatchdog.getState().state,
+      schedulerStaleAfterMs: Number(
+        settings.get<number>(SCHEDULER_STALE_AFTER_MS_SETTING) ?? SCHEDULER_STALE_AFTER_MS_DEFAULT,
+      ),
+    }),
+    getSetting: (key) => settings.get(key),
+    diskCheckPath: env.DB_PATH,
+    ...(overrides.now ? { now: overrides.now } : {}),
+  });
+
   registry = new KernelRegistry();
   registry.register(tasksManifest);
   registry.register(chainsManifest);
@@ -306,6 +391,7 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   registry.register(hygieneManifest);
   registry.register(nudgesManifest);
   registry.register(nextActionManifest);
+  registry.register(infraOpsManifest);
   if (googleCalendarModule) registry.register(googleCalendarModule.manifest);
 
   runMigrations(db, [...coreMigrations, ...registry.getMigrations()]);
@@ -314,14 +400,12 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
 
   settings.seedDefaults(registry.getSettingsDefaults());
 
-  const scheduler = new Scheduler({
+  scheduler = new Scheduler({
     repository: jobRepository,
     jobHandlers: registry.getJobHandlers(),
     logger,
     ...(overrides.now ? { now: overrides.now } : {}),
   });
-
-  const connectionWatchdog = new ConnectionWatchdog();
 
   const outboxProcessor = new OutboxProcessor({
     repository: outboxRepository,
@@ -367,6 +451,9 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
     connectionWatchdog,
     getLastSchedulerTick: () => scheduler.getLastTickAt(),
     buildVersion: BUILD_VERSION,
+    getSchedulerStaleAfterMs: () =>
+      Number(settings.get<number>(SCHEDULER_STALE_AFTER_MS_SETTING) ?? SCHEDULER_STALE_AFTER_MS_DEFAULT),
+    ...(overrides.now ? { now: overrides.now } : {}),
   });
 
   // Rotas administrativas de setup único (spec FEAT-005, impacto técnico):
@@ -422,6 +509,20 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
         settings.get<number>(NUDGES_CHECK_INTERVAL_MINUTES_SETTING) ??
         registry.getSettingsDefaults()[NUDGES_CHECK_INTERVAL_MINUTES_SETTING];
       ensureNudgesJob(jobRepository, Number(checkIntervalMinutes), overrides.now ? overrides.now() : new Date());
+
+      // Dead man's switch e monitor de custo (FEAT-008, RF-13/RF-15): jobs
+      // durável na tabela `jobs`, nunca timer solto (ADR-004) — mesmo padrão
+      // idempotente dos demais seeds acima.
+      const bootNow = overrides.now ? overrides.now() : new Date();
+      const deadMansSwitchIntervalMinutes =
+        settings.get<number>(DEAD_MANS_SWITCH_INTERVAL_MINUTES_SETTING) ??
+        registry.getSettingsDefaults()[DEAD_MANS_SWITCH_INTERVAL_MINUTES_SETTING];
+      ensureRecurringJob(jobRepository, DEAD_MANS_SWITCH_JOB_TYPE, Number(deadMansSwitchIntervalMinutes), bootNow);
+
+      const costMonitorIntervalMinutes =
+        settings.get<number>(COST_MONITOR_INTERVAL_MINUTES_SETTING) ??
+        registry.getSettingsDefaults()[COST_MONITOR_INTERVAL_MINUTES_SETTING];
+      ensureRecurringJob(jobRepository, COST_MONITOR_JOB_TYPE, Number(costMonitorIntervalMinutes), bootNow);
 
       await scheduler.runCatchUp();
       scheduler.start();

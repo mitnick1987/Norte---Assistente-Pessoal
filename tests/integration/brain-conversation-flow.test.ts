@@ -27,6 +27,7 @@ import { buildGoogleCalendarTools } from '../../src/modules/integrations/google-
 import type { GoogleOAuthPort } from '../../src/modules/integrations/google-calendar/google-oauth-client.js';
 import { stubFetch, jsonResponse, type FetchCall } from '../factories/fetch-stub.js';
 import { anthropicToolUseResponse, anthropicBrainToolUseResponse, anthropicTextResponse } from '../factories/anthropic-stub.js';
+import { buildAlerterStub } from '../factories/alerter-stub.js';
 
 const OWNER_JID = '5511999999999@s.whatsapp.net';
 const FIXED_NOW = new Date('2026-08-25T13:00:00.000Z'); // terça-feira, 10h America/Sao_Paulo
@@ -75,7 +76,7 @@ function buildContext(oauthOverrides: Partial<GoogleOAuthPort> = {}) {
   };
   const tokensRepository = new AuthTokensRepository(db);
   const cipher = new TokenCipher(randomBytes(32).toString('base64'));
-  const alerter = { alertDeliveryExhausted: vi.fn(), alertRefreshFailure: vi.fn(), alertAnchorRitualCapped: vi.fn() };
+  const alerter = buildAlerterStub();
 
   const googleCalendarService = new GoogleCalendarService({
     db,

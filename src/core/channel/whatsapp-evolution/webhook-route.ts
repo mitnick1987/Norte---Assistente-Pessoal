@@ -166,6 +166,11 @@ export function registerEvolutionWebhookRoute(app: FastifyInstance, deps: Webhoo
       return reply.code(200).send({ ok: true });
     }
 
+    if (event.event === 'qrcode.updated') {
+      deps.connectionWatchdog.observeQrRequested();
+      return reply.code(200).send({ ok: true });
+    }
+
     if (isEchoOfOwnMessage(event)) {
       return reply.code(200).send({ ignored: true });
     }

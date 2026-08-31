@@ -68,4 +68,20 @@ describe('createLogger', () => {
 
     expect(output()).not.toContain('chave-openai-nao-pode-vazar');
   });
+
+  it('redige HEALTHCHECKS_PING_URL (uuid do dead man switch é secreto — quem tiver a URL pode falsificar o ping, achado de review FEAT-008)', () => {
+    const { logger, output } = captureLogger('production');
+
+    logger.info({ HEALTHCHECKS_PING_URL: 'https://hc-ping.com/uuid-nao-pode-vazar' }, 'boot concluído');
+
+    expect(output()).not.toContain('uuid-nao-pode-vazar');
+  });
+
+  it('redige ALERT_EMAIL_FROM (PII do remetente de alerta, mesmo tratamento de ALERT_EMAIL)', () => {
+    const { logger, output } = captureLogger('production');
+
+    logger.info({ ALERT_EMAIL_FROM: 'alertas-nao-pode-vazar@dono.com' }, 'boot concluído');
+
+    expect(output()).not.toContain('alertas-nao-pode-vazar@dono.com');
+  });
 });

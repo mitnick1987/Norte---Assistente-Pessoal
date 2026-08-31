@@ -126,6 +126,37 @@ export class MessageRepository {
       .run(input.jid, input.intent, input.tokensIn, input.tokensOut, input.cacheReadTokens);
   }
 
+  /**
+   * Base do monitor de custo (RF-15, FEAT-008): toda linha gravada por
+   * `recordLlmUsage` dentro da janela, em ordem cronológica — a detecção de
+   * regressão de cache depende da ordem para contar ocorrências
+   * CONSECUTIVAS de `cache_read_tokens = 0`, não só a contagem total. Corte
+   * pelo limiar em JS (mesmo padrão de `findPendingInbound`/`due-jobs.ts`) —
+   * `created_at` usa `datetime('now')` do SQLite (`'2026-08-30 23:18:10'`),
+   * formato diferente de `Date#toISOString()`; comparar como string em SQL
+   * silenciosamente descarta linhas.
+   */
+  findUsageSince(since: Date): { intent: string; tokensIn: number; tokensOut: number; cacheReadTokens: number; createdAt: string }[] {
+    return this.db
+      .prepare<
+        [],
+        { intent: string | null; tokens_in: number | null; tokens_out: number | null; cache_read_tokens: number | null; created_at: string }
+      >(
+        `SELECT intent, tokens_in, tokens_out, cache_read_tokens, created_at FROM messages
+         WHERE intent IS NOT NULL AND tokens_in IS NOT NULL
+         ORDER BY id ASC`,
+      )
+      .all()
+      .filter((row) => parseSqliteOrIsoDate(row.created_at).getTime() >= since.getTime())
+      .map((row) => ({
+        intent: row.intent ?? '',
+        tokensIn: row.tokens_in ?? 0,
+        tokensOut: row.tokens_out ?? 0,
+        cacheReadTokens: row.cache_read_tokens ?? 0,
+        createdAt: row.created_at,
+      }));
+  }
+
   markProcessed(messageId: number): void {
     this.db.prepare(`UPDATE messages SET processing_status = 'processed' WHERE id = ?`).run(messageId);
   }
@@ -222,6 +253,19 @@ export class MessageRepository {
 
 function isUniqueConstraintError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('UNIQUE constraint failed');
+}
+
+/**
+ * `created_at` normalmente vem de `datetime('now')` do SQLite
+ * (`'2026-08-30 23:20:04'`, sem `T`/`Z` — interpretado como local se passado
+ * direto ao `Date`), mas nada impede um valor já em ISO 8601 completo
+ * (`Date#toISOString()`) chegar aqui. Detecta o formato em vez de assumir um
+ * único caso — concatenar `Z` num valor que já termina em `Z` produz uma
+ * data inválida (`NaN`).
+ */
+function parseSqliteOrIsoDate(value: string): Date {
+  const isIso = value.includes('T') || value.endsWith('Z');
+  return isIso ? new Date(value) : new Date(`${value.replace(' ', 'T')}Z`);
 }
 
 /** Payload malformado nunca derruba a varredura de recuperação (SECURITY.md §6) — trata como dado ausente. */
