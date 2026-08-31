@@ -6,6 +6,7 @@ Stack: a definida em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Documentação
 
+- [docs/HANDOFF.md](docs/HANDOFF.md) — estado real do projeto agora: o que funciona, débitos, como assumir
 - [docs/PRD.md](docs/PRD.md) — o que estamos construindo e por quê
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — módulos, modelo de dados, ADRs
 - [docs/SECURITY.md](docs/SECURITY.md) — autenticação, autorização, secrets, borda
@@ -27,7 +28,7 @@ Pré-requisitos: Node 22, Docker Desktop (perfil `local` do Compose — ADR-013)
    cp .env.example .env
    ```
 
-   Preencha pelo menos `EVOLUTION_API_KEY`, `EVOLUTION_POSTGRES_PASSWORD`, `EVOLUTION_WEBHOOK_SECRET` (≥ 32 caracteres) e `OWNER_WHATSAPP_JID` (o número do dono, formato `55DDDNUMERO@s.whatsapp.net`).
+   Preencha pelo menos `EVOLUTION_API_KEY`, `EVOLUTION_POSTGRES_PASSWORD`, `EVOLUTION_WEBHOOK_SECRET` (≥ 32 caracteres), `OWNER_WHATSAPP_JID` (o número do dono, formato `55DDDNUMERO@s.whatsapp.net`), `ANTHROPIC_API_KEY` (triagem e brain) e `GROQ_API_KEY` (transcrição de áudio). `GOOGLE_*` (agenda) e `SMTP_URL`/`RESEND_API_KEY` + `ALERT_EMAIL` (alertas) são opcionais e podem ser configurados depois.
 
 2. Suba a Evolution API e o brain (perfil local — sem Caddy, sem Litestream, portas só em `localhost`). O arquivo `docker-compose.local.yml` é o que publica a porta do painel da Evolution — nunca combinar esse override em produção:
 
@@ -44,7 +45,7 @@ Pré-requisitos: Node 22, Docker Desktop (perfil `local` do Compose — ADR-013)
    npm run dev
    ```
 
-5. Envie "ping" pelo WhatsApp a partir do `OWNER_WHATSAPP_JID`: a resposta "pong" confirma o pipeline ponta a ponta (kernel + commands + channel + outbox, sem LLM).
+5. Envie uma mensagem pelo WhatsApp a partir do `OWNER_WHATSAPP_JID` — ex.: *"lembra de pagar o boleto sexta 14h"*. O Norte confirma a captura em uma linha (triagem Haiku → task-store); *"me mostra tudo"* lista os itens; *"feito"* conclui o mais recente. Uma nota de voz com vários assuntos vira vários itens numa resposta. Mensagens de qualquer número diferente do `OWNER_WHATSAPP_JID` são ignoradas (filtro de dono, ADR-005).
 
 6. Testes:
 
