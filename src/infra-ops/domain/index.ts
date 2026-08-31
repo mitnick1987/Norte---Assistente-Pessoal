@@ -1,4 +1,5 @@
 export { shouldSendAlert } from './anti-flood.js';
+export { sanitizeErrorMessage } from './error-sanitizer.js';
 export {
   summarizeCost,
   projectMonthlyCost,

@@ -95,4 +95,18 @@ describe('loadEnv', () => {
     const env = loadEnv({ ...validEnv(), HEALTHCHECKS_PING_URL: 'https://hc-ping.com/uuid' });
     expect(env.HEALTHCHECKS_PING_URL).toBe('https://hc-ping.com/uuid');
   });
+
+  it('sobe sem ALERT_EMAIL_FROM (opcional — SmtpMailer cai para o usuário da SMTP_URL ou ALERT_EMAIL, achado de review FEAT-008)', () => {
+    const env = loadEnv(validEnv());
+    expect(env.ALERT_EMAIL_FROM).toBeUndefined();
+  });
+
+  it('aceita ALERT_EMAIL_FROM quando configurada', () => {
+    const env = loadEnv({ ...validEnv(), ALERT_EMAIL_FROM: 'alertas@dono-verificado.com' });
+    expect(env.ALERT_EMAIL_FROM).toBe('alertas@dono-verificado.com');
+  });
+
+  it('rejeita ALERT_EMAIL_FROM que não seja um e-mail válido', () => {
+    expect(() => loadEnv({ ...validEnv(), ALERT_EMAIL_FROM: 'não-é-email' })).toThrow(InvalidEnvError);
+  });
 });

@@ -36,6 +36,10 @@ export const CACHE_REGRESSION_THRESHOLD_SETTING = 'infraOps.cacheRegressionThres
 /** N chamadas seguidas ao Sonnet com cache_read=0 — 1 isolada é esperada (conversa nova sem histórico ainda). */
 const CACHE_REGRESSION_THRESHOLD_DEFAULT = 3;
 
+export const CACHE_REGRESSION_MAX_GAP_MS_SETTING = 'infraOps.cacheRegressionMaxGapMs';
+/** TTL do cache ephemeral da Anthropic é ~5min — gap maior que isso não é uma sequência de cache frio, é ausência de chance de hit (rituais espaçados como briefing/revisão). */
+const CACHE_REGRESSION_MAX_GAP_MS_DEFAULT = 5 * 60_000;
+
 export const DISK_USAGE_THRESHOLD_PERCENT_SETTING = 'infraOps.diskUsageThresholdPercent';
 const DISK_USAGE_THRESHOLD_PERCENT_DEFAULT = 85;
 
@@ -95,6 +99,9 @@ function readCostSettings(getSetting: BuildInfraOpsModuleDeps['getSetting']): Co
     cacheRegressionThreshold: Number(
       getSetting<number>(CACHE_REGRESSION_THRESHOLD_SETTING) ?? CACHE_REGRESSION_THRESHOLD_DEFAULT,
     ),
+    cacheRegressionMaxGapMs: Number(
+      getSetting<number>(CACHE_REGRESSION_MAX_GAP_MS_SETTING) ?? CACHE_REGRESSION_MAX_GAP_MS_DEFAULT,
+    ),
   };
 }
 
@@ -149,6 +156,7 @@ export function buildInfraOpsModule(deps: BuildInfraOpsModuleDeps): { manifest: 
       [COST_MONITOR_SAMPLE_WINDOW_DAYS_SETTING]: COST_MONITOR_SAMPLE_WINDOW_DAYS_DEFAULT,
       [MONTHLY_BUDGET_USD_SETTING]: MONTHLY_BUDGET_USD_DEFAULT,
       [CACHE_REGRESSION_THRESHOLD_SETTING]: CACHE_REGRESSION_THRESHOLD_DEFAULT,
+      [CACHE_REGRESSION_MAX_GAP_MS_SETTING]: CACHE_REGRESSION_MAX_GAP_MS_DEFAULT,
       [DISK_USAGE_THRESHOLD_PERCENT_SETTING]: DISK_USAGE_THRESHOLD_PERCENT_DEFAULT,
       [SONNET_INPUT_PRICE_PER_MILLION_SETTING]: SONNET_INPUT_PRICE_PER_MILLION_DEFAULT,
       [SONNET_OUTPUT_PRICE_PER_MILLION_SETTING]: SONNET_OUTPUT_PRICE_PER_MILLION_DEFAULT,

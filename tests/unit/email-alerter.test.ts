@@ -163,4 +163,25 @@ describe('EmailAlerter — anti-flood', () => {
 
     expect(mailer.send).toHaveBeenCalledTimes(2);
   });
+
+  /**
+   * Achado de review FEAT-008: o anti-flood era check-then-act (lê
+   * "fora da janela", só grava depois do `await mailer.send`) — dois
+   * disparos concorrentes do MESMO alerta liam o estado antes de qualquer
+   * um gravar, e os dois enviavam. `Promise.all` aqui simula o cenário real
+   * (dois eventos que disparam o mesmo `alertKey` quase ao mesmo tempo,
+   * ex. dois retries esgotando quase juntos); com o claim atômico
+   * (AlertDispatchRepository.tryClaim), só uma das duas chamadas envia.
+   */
+  it('dois disparos concorrentes da mesma chave — só um envio (claim atômico sob concorrência)', async () => {
+    const { mailer } = buildMailerStub();
+    const { alerter } = buildAlerter({ mailer });
+
+    await Promise.all([
+      alerter.alertDeliveryExhausted({ id: 99, jid: 'x', attempts: 5 }),
+      alerter.alertDeliveryExhausted({ id: 99, jid: 'x', attempts: 5 }),
+    ]);
+
+    expect(mailer.send).toHaveBeenCalledTimes(1);
+  });
 });

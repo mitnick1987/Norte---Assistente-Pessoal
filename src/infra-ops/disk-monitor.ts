@@ -20,7 +20,11 @@ export async function checkDiskUsage(deps: DiskMonitorDeps): Promise<void> {
   try {
     const stats = await statfs(deps.path);
     const totalBytes = stats.blocks * stats.bsize;
-    const freeBytes = stats.bfree * stats.bsize;
+    // bavail (não bfree): bfree inclui blocos reservados ao root, que um
+    // processo sem privilégio nunca consegue de fato usar — bavail é o que
+    // sobra disponível para o usuário que roda o processo (glossário POSIX
+    // statvfs), o número que importa para prever "vai faltar espaço".
+    const freeBytes = stats.bavail * stats.bsize;
     const usagePercent = diskUsagePercent(totalBytes, freeBytes);
 
     if (diskUsageExceeded(usagePercent, deps.thresholdPercent)) {

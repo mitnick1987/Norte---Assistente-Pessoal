@@ -13,6 +13,7 @@ const SETTINGS: CostSettings = {
   haikuPricing: { inputPerMillion: 1, outputPerMillion: 5, cacheReadPerMillion: 0.1 },
   monthlyBudgetUsd: 25,
   cacheRegressionThreshold: 3,
+  cacheRegressionMaxGapMs: 5 * 60_000,
 };
 
 function usageRow(overrides: Partial<UsageRow> = {}): UsageRow {
@@ -160,6 +161,42 @@ describe('detectCacheRegression', () => {
       usageRow({ intent: 'conversa', cacheReadTokens: 500 }),
       usageRow({ intent: 'conversa', cacheReadTokens: 500 }),
       usageRow({ intent: 'conversa', cacheReadTokens: 500 }),
+    ];
+
+    expect(detectCacheRegression(rows, SETTINGS)).toBe(false);
+  });
+
+  it('briefing e revisão intercalados com ~14h de gap não disparam (cache frio esperado, gap muito além do TTL)', () => {
+    const day1briefing = new Date('2026-08-30T10:40:00.000Z'); // 7h40 America/Sao_Paulo
+    const day1revisao = new Date('2026-08-31T00:30:00.000Z'); // 21h30 America/Sao_Paulo
+    const day2briefing = new Date('2026-08-31T10:40:00.000Z');
+    const rows = [
+      usageRow({ intent: 'briefing', cacheReadTokens: 0, createdAt: day1briefing }),
+      usageRow({ intent: 'revisao', cacheReadTokens: 0, createdAt: day1revisao }),
+      usageRow({ intent: 'briefing', cacheReadTokens: 0, createdAt: day2briefing }),
+    ];
+
+    expect(detectCacheRegression(rows, SETTINGS)).toBe(false);
+  });
+
+  it('conversa consecutiva com gap curto (dentro do TTL do cache) soma para a contagem e dispara', () => {
+    const start = new Date('2026-08-30T12:00:00.000Z');
+    const rows = [
+      usageRow({ intent: 'conversa', cacheReadTokens: 0, createdAt: start }),
+      usageRow({ intent: 'conversa', cacheReadTokens: 0, createdAt: new Date(start.getTime() + 60_000) }),
+      usageRow({ intent: 'conversa', cacheReadTokens: 0, createdAt: new Date(start.getTime() + 120_000) }),
+    ];
+
+    expect(detectCacheRegression(rows, SETTINGS)).toBe(true);
+  });
+
+  it('gap além do TTL entre chamadas de conversa reinicia a contagem consecutiva mesmo sem trocar de intent', () => {
+    const start = new Date('2026-08-30T12:00:00.000Z');
+    const rows = [
+      usageRow({ intent: 'conversa', cacheReadTokens: 0, createdAt: start }),
+      usageRow({ intent: 'conversa', cacheReadTokens: 0, createdAt: new Date(start.getTime() + 60_000) }),
+      // gap de 1h > TTL de 5min: reinicia a sequência
+      usageRow({ intent: 'conversa', cacheReadTokens: 0, createdAt: new Date(start.getTime() + 60 * 60_000) }),
     ];
 
     expect(detectCacheRegression(rows, SETTINGS)).toBe(false);

@@ -2,7 +2,7 @@ import type { Logger } from 'pino';
 import type { FailureAlerter } from '../core/outbox/alerter.js';
 import type { Mailer } from './mailer.js';
 import type { AlertDispatchRepository } from './alert-dispatch-repository.js';
-import { shouldSendAlert } from './domain/anti-flood.js';
+import { sanitizeErrorMessage } from './domain/error-sanitizer.js';
 import {
   anchorRitualCappedMessage,
   cacheRegressionMessage,
@@ -47,8 +47,13 @@ export class EmailAlerter implements FailureAlerter {
       return;
     }
 
-    const lastSentAt = this.dispatchRepository.findLastSentAt(alertKey);
-    if (!shouldSendAlert(lastSentAt, this.now(), this.config.getAntiFloodWindowMs())) {
+    // Claim atômico ANTES do envio (achado de review FEAT-008): reivindica
+    // o slot da janela de anti-flood numa única operação síncrona do
+    // SQLite, fechando a corrida que existia entre ler "fora da janela" e
+    // gravar só depois do envio assíncrono — dois disparos concorrentes da
+    // mesma chave não passam mais os dois pelo `mailer.send`.
+    const claimed = this.dispatchRepository.tryClaim(alertKey, this.now(), this.config.getAntiFloodWindowMs());
+    if (!claimed) {
       this.logger.info({ alertKey }, 'alerta suprimido pelo anti-flood (mesma chave dentro da janela)');
       return;
     }
@@ -56,12 +61,12 @@ export class EmailAlerter implements FailureAlerter {
     const { subject, text } = build();
     try {
       await this.mailer.send({ to: this.config.alertEmail, subject, text });
-      this.dispatchRepository.recordSent(alertKey, this.now());
     } catch (err) {
       // Falha de envio não tem canal acima do e-mail para escalar (spec,
       // Decisões tomadas) — só log `error`. `err` nunca bruto: pode carregar
       // corpo de resposta do provedor SMTP/Resend com credencial embutida.
-      const message = err instanceof Error ? err.message : 'erro desconhecido';
+      const rawMessage = err instanceof Error ? err.message : 'erro desconhecido';
+      const message = sanitizeErrorMessage(rawMessage);
       this.logger.error({ ...logPayload, message }, 'falha ao enviar e-mail de alerta');
     }
   }
@@ -78,7 +83,8 @@ export class EmailAlerter implements FailureAlerter {
     // `err` nunca entra bruto no log estruturado (pode carregar corpo de
     // resposta do provedor com token/segredo embutido) — só o provider e a
     // mensagem já bastam para o dono investigar (SECURITY.md §4).
-    const message = context.err instanceof Error ? context.err.message : 'erro desconhecido';
+    const rawMessage = context.err instanceof Error ? context.err.message : 'erro desconhecido';
+    const message = sanitizeErrorMessage(rawMessage);
     await this.dispatch(
       `refresh_failure:${context.provider}`,
       () => refreshFailureMessage(context.provider),

@@ -35,6 +35,8 @@ const REDACTED_PATHS = [
   'RESEND_API_KEY',
   'SMTP_URL',
   'ALERT_EMAIL',
+  'ALERT_EMAIL_FROM',
+  'HEALTHCHECKS_PING_URL',
   'refreshToken',
   '*.refreshToken',
   'refresh_token',

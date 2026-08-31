@@ -175,7 +175,12 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   // dois estão configurados (build-mailer.ts). Sem nenhum dos dois, `mailer`
   // fica undefined e o EmailAlerter cai em log `error` — nunca falha em
   // silêncio (spec item 1).
-  const mailer = buildMailer({ smtpUrl: env.SMTP_URL, resendApiKey: env.RESEND_API_KEY });
+  const mailer = buildMailer({
+    smtpUrl: env.SMTP_URL,
+    resendApiKey: env.RESEND_API_KEY,
+    alertEmailFrom: env.ALERT_EMAIL_FROM,
+    alertEmail: env.ALERT_EMAIL,
+  });
   const alertDispatchRepository = new AlertDispatchRepository(db);
   const alerter = new EmailAlerter(
     {
@@ -332,9 +337,14 @@ export function buildApp(env: Env, overrides: BuildAppOverrides = {}): App {
   // alerter na primeira mudança de estado observada.
   const connectionWatchdog = new ConnectionWatchdog({
     onStateChange: (state) => {
+      // Só alerta em estado que exige ação humana de fato — 'close' (sessão
+      // caída) e 'qr_requested' (precisa re-scan). 'connecting' é reconexão
+      // de rotina que o Baileys resolve sozinho o tempo todo (a cada
+      // instabilidade de rede ele passa por 'connecting' antes de 'open' de
+      // novo); alertar nesse estado é falso positivo, não sinal real.
       // 'unknown' é o estado inicial em memória, nunca uma transição real
       // observada — alertar aqui seria ruído em todo boot do processo.
-      if (state === 'open' || state === 'unknown') return;
+      if (state !== 'close' && state !== 'qr_requested') return;
       void alerter.alertSessionDown({ state }).catch((err: unknown) => {
         logger.error({ err }, 'falha ao processar alerta de sessão caída');
       });

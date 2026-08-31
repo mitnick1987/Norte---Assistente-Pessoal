@@ -15,6 +15,15 @@ export interface CostSettings {
   readonly monthlyBudgetUsd: number;
   /** N ocorrências consecutivas de `cacheReadTokens = 0` ao Sonnet que caracterizam regressão de cache (settings). */
   readonly cacheRegressionThreshold: number;
+  /**
+   * Intervalo máximo entre duas chamadas para contarem como "consecutivas"
+   * na detecção de regressão de cache (settings, ms). O cache ephemeral da
+   * Anthropic tem TTL de ~5min — briefing (7h40) e revisão (21h30) ficam
+   * ~14h afastados, muito além do TTL, e gravam cache_read=0 legitimamente.
+   * Sem esse teto, uma sequência de chamadas frias por natureza (rituais
+   * diários espaçados) dispara falso positivo de regressão de caching.
+   */
+  readonly cacheRegressionMaxGapMs: number;
 }
 
 /** `triagem` é a única chamada roteada para Haiku (capture/manifest.ts); todo o resto (`conversa`, `briefing`, `revisao`) vai para Sonnet. */
@@ -94,12 +103,26 @@ export function budgetExceeded(projectedMonthlyCostUsd: number, settings: CostSe
  * (primeira chamada de uma conversa nova, sem histórico ainda) e não deveria
  * disparar nada; só a sequência sugere que o prompt parou de bater cache.
  * `rows` é assumido em ordem cronológica (mais antiga primeiro).
+ *
+ * "Seguidas" exige gap <= `cacheRegressionMaxGapMs` entre as chamadas: sem
+ * isso, briefing e revisão (rituais fixos e distantes no tempo, ~14h) contam
+ * como sequência de cache frio e disparam falso positivo, quando na verdade
+ * nunca teriam chance de compartilhar o cache ephemeral (achado de review
+ * FEAT-008). Um gap grande reinicia a contagem, mesmo com cache_read=0.
  */
 export function detectCacheRegression(rows: readonly UsageRow[], settings: CostSettings): boolean {
   let consecutiveZeroCacheSonnet = 0;
+  let previousSonnetCreatedAt: Date | undefined;
 
   for (const row of rows) {
     if (modelForIntent(row.intent) !== 'sonnet') continue;
+
+    const gapMs = previousSonnetCreatedAt ? row.createdAt.getTime() - previousSonnetCreatedAt.getTime() : undefined;
+    previousSonnetCreatedAt = row.createdAt;
+
+    if (gapMs !== undefined && gapMs > settings.cacheRegressionMaxGapMs) {
+      consecutiveZeroCacheSonnet = 0;
+    }
 
     if (row.cacheReadTokens === 0) {
       consecutiveZeroCacheSonnet += 1;

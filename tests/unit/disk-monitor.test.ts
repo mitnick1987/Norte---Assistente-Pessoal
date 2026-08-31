@@ -13,7 +13,7 @@ function silentLogger() {
 describe('checkDiskUsage', () => {
   it('dispara alerta quando o uso passa do limiar', async () => {
     const { statfs } = await import('node:fs/promises');
-    vi.mocked(statfs).mockResolvedValue({ blocks: 100, bfree: 5, bsize: 1 } as never);
+    vi.mocked(statfs).mockResolvedValue({ blocks: 100, bfree: 5, bavail: 5, bsize: 1 } as never);
 
     const alerter = buildAlerterStub();
     await checkDiskUsage({ path: '/data', thresholdPercent: 85, alerter, logger: silentLogger() });
@@ -23,12 +23,24 @@ describe('checkDiskUsage', () => {
 
   it('não dispara alerta quando o uso está abaixo do limiar', async () => {
     const { statfs } = await import('node:fs/promises');
-    vi.mocked(statfs).mockResolvedValue({ blocks: 100, bfree: 50, bsize: 1 } as never);
+    vi.mocked(statfs).mockResolvedValue({ blocks: 100, bfree: 50, bavail: 50, bsize: 1 } as never);
 
     const alerter = buildAlerterStub();
     await checkDiskUsage({ path: '/data', thresholdPercent: 85, alerter, logger: silentLogger() });
 
     expect(alerter.alertDiskUsage).not.toHaveBeenCalled();
+  });
+
+  it('usa bavail (espaço disponível ao usuário), não bfree (inclui reserva do root) — blocos reservados contam como usados', async () => {
+    const { statfs } = await import('node:fs/promises');
+    // bfree alto sugeriria 90% livre, mas bavail (o que o processo sem
+    // privilégio realmente pode usar) mostra só 3% livre — acima do limiar.
+    vi.mocked(statfs).mockResolvedValue({ blocks: 100, bfree: 90, bavail: 3, bsize: 1 } as never);
+
+    const alerter = buildAlerterStub();
+    await checkDiskUsage({ path: '/data', thresholdPercent: 85, alerter, logger: silentLogger() });
+
+    expect(alerter.alertDiskUsage).toHaveBeenCalledWith({ usagePercent: 97, thresholdPercent: 85 });
   });
 
   it('falha ao checar disco (best-effort) não derruba o processo, loga e segue sem alertar', async () => {

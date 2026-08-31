@@ -86,6 +86,40 @@ describe('FEAT-008 — sessão cai dispara e-mail real (stub)', () => {
     expect(resendCalls).toHaveLength(0);
   });
 
+  it('estado connecting (reconexão de rotina do Baileys) não dispara alerta — falso positivo corrigido', async () => {
+    const { resendCalls } = stubFetchWithResend();
+    app = buildTestApp({ RESEND_API_KEY, ALERT_EMAIL });
+
+    await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: { event: 'connection.update', instance: 'norte-test', data: { state: 'connecting' } },
+    });
+
+    expect(resendCalls).toHaveLength(0);
+  });
+
+  it('sequência connecting → close dispara alerta só na transição para close (não em connecting)', async () => {
+    const { resendCalls } = stubFetchWithResend();
+    app = buildTestApp({ RESEND_API_KEY, ALERT_EMAIL });
+
+    await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: { event: 'connection.update', instance: 'norte-test', data: { state: 'connecting' } },
+    });
+    await app.fastify.inject({
+      method: 'POST',
+      url: '/webhook/evolution',
+      headers: { 'x-webhook-secret': WEBHOOK_SECRET },
+      payload: { event: 'connection.update', instance: 'norte-test', data: { state: 'close' } },
+    });
+
+    expect(resendCalls).toHaveLength(1);
+  });
+
   it('QRCODE_UPDATED (pedido de novo QR) aciona o mesmo alerta de re-scan', async () => {
     const { resendCalls } = stubFetchWithResend();
     app = buildTestApp({ RESEND_API_KEY, ALERT_EMAIL });

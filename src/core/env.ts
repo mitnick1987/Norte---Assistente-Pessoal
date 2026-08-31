@@ -37,6 +37,11 @@ const envSchema = z.object({
   SMTP_URL: z.string().optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
   ALERT_EMAIL: z.string().email().optional(),
+  // From do transporte SMTP (nunca do Resend — esse usa o sandbox fixo,
+  // build-mailer.ts). Sem isso o SmtpMailer cai para o usuário embutido na
+  // própria SMTP_URL e, por último, para ALERT_EMAIL; um From alheio ao
+  // provedor SMTP do dono falha SPF/DKIM e o alerta não entrega (spec review FEAT-008).
+  ALERT_EMAIL_FROM: z.string().email().optional(),
 
   // Dead man's switch externo (FEAT-008, RF-13): ausente desliga o ping,
   // nunca derruba o boot — é possível operar sem Healthchecks.io configurado,
